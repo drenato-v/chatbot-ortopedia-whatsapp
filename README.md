@@ -62,22 +62,29 @@ Organização
 # Como executar
 
 1. Clone o repositório
+   
 
 git clone https://github.com/drenato-v/chatbot-ortopedia-whatsapp.git
 
 cd chatbot-ortopedia-whatsapp
 
+
 2. Crie e ative o ambiente virtual
+
 
 python -m venv venv
 
 source venv/bin/activate
 
+
 3. Instale as dependências
+
 
 pip install -r requirements.txt
 
+
 4. Configure as variáveis de ambiente
+
 
 Crie um arquivo .env contendo as credenciais necessárias:
 
@@ -88,6 +95,7 @@ MYSQL_USER=
 MYSQL_PASSWORD=
 MYSQL_DATABASE=
 REDIS_HOST=
+
 
 5. Execute o projeto
 
@@ -113,4 +121,5 @@ Durante o desenvolvimento foram explorados conceitos como:
 Autor
 
 Diego Renato Vasconcelos de Lima
+
 Desenvolvido para a Ortopedia Geral
