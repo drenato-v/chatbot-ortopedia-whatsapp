@@ -1,4 +1,4 @@
-*Chatbot Ortopedia WhatsApp*
+# Chatbot Ortopedia WhatsApp
 
 Sistema de atendimento automatizado desenvolvido para centralizar o contato entre clientes e a operação da Ortopedia Geral utilizando integração com WhatsApp, inteligência artificial e serviços internos.
 
@@ -52,30 +52,57 @@ Ambiente de desenvolvimento
 
 ⸻
 
-Estrutura do projeto
+chatbot-ortopedia-whatsapp
 
-src/
-├── db/
-│   ├── mysql.py
-│   └── redis.py
 │
-├── models/
-│   ├── schemas.py
+
+├── src
+
+│   ├── db
+
+│   │   ├── mysql.py
+
+│   │   └── redis.py
+
+│   │
+
+│   ├── models
+
+│   │   └── schemas.py
+
+│   │
+
+│   ├── routes
+
+│   │   ├── admin.py
+
+│   │   └── webhook.py
+
+│   │
+
+│   ├── services
+
+│   │   ├── claude_service.py
+
+│   │   ├── disponibilidade_service.py
+
+│   │   ├── session_service.py
+
+│   │   ├── tecnico_service.py
+
+│   │   └── whatsapp.py
+
+│   │
+
+│   └── main.py
+
 │
-├── routes/
-│   └── admin.py
-│   └── webhook.py
-│
-├── services/
-│   ├── claude_service.py
-│   └── disponibilidade_service.py
-│   └── session_service.py
-│   └── tecnico_service.py
-│   └── whatsapp.py
-│
-└── main.py
-.env
-requirements.txt
+
+├── .env
+
+├── requirements.txt
+
+└── README.md
 
 Organização
 
