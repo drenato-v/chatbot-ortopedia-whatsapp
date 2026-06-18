@@ -50,60 +50,6 @@ Ambiente de desenvolvimento
 * Visual Studio Code
 * macOS
 
-⸻
-
-chatbot-ortopedia-whatsapp
-
-│
-
-├── src
-
-│   ├── db
-
-│   │   ├── mysql.py
-
-│   │   └── redis.py
-
-│   │
-
-│   ├── models
-
-│   │   └── schemas.py
-
-│   │
-
-│   ├── routes
-
-│   │   ├── admin.py
-
-│   │   └── webhook.py
-
-│   │
-
-│   ├── services
-
-│   │   ├── claude_service.py
-
-│   │   ├── disponibilidade_service.py
-
-│   │   ├── session_service.py
-
-│   │   ├── tecnico_service.py
-
-│   │   └── whatsapp.py
-
-│   │
-
-│   └── main.py
-
-│
-
-├── .env
-
-├── requirements.txt
-
-└── README.md
-
 Organização
 
 * main.py → ponto de entrada da aplicação;
@@ -113,17 +59,18 @@ Organização
 
 ⸻
 
-Como executar
+# Como executar
 
 1. Clone o repositório
 
-git clone https://github.com/drenato-v/chatbot-ortopedia-whatsapp
+git clone https://github.com/drenato-v/chatbot-ortopedia-whatsapp.git
+
 cd chatbot-ortopedia-whatsapp
 
 2. Crie e ative o ambiente virtual
 
 python -m venv venv
-# macOS/Linux
+
 source venv/bin/activate
 
 3. Instale as dependências
