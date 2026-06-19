@@ -55,18 +55,18 @@ def buscar_tecnico_cliente(
 
         return cursor.fetchone()
 
-
 def buscar_tecnicos_disponiveis(
     data: str,
     hora: int,
     setor: str
 ) -> List[dict]:
     """
-    Retorna técnicos ativos disponíveis.
+    Retorna técnicos disponíveis considerando modo_atendimento.
+    - individual: só aparece se o horário estiver livre
+    - compartilhado: aparece mesmo se já tiver agendamento (divide com outro)
+    - flexivel: aparece sozinho ou junto dependendo da demanda
     """
-
     with db_cursor(dictionary=True) as (_, cursor):
-
         cursor.execute("""
             SELECT t.*
             FROM tecnicos t
@@ -78,10 +78,14 @@ def buscar_tecnicos_disponiveis(
                 AND dt.data = %s
                 AND dt.hora = %s
                 AND dt.disponivel = TRUE
+            ORDER BY
+                CASE t.modo_atendimento
+                    WHEN 'individual' THEN 1
+                    WHEN 'flexivel' THEN 2
+                    WHEN 'compartilhado' THEN 3
+                END
         """, (setor, data, hora))
-
         return cursor.fetchall()
-
 
 def buscar_horarios_disponiveis(
     setor: str,
@@ -217,7 +221,6 @@ def marcar_hora_como_ocupada(
             hora
         ))
 
-
 def liberar_hora(
     tecnico_id: int,
     data: str,
@@ -241,3 +244,71 @@ def liberar_hora(
             data,
             hora
         ))
+
+def buscar_agenda_dia(
+    tecnico_id: int,
+    data: str
+) -> List[dict]:
+    """
+    Retorna o status (disponível ou não) de cada hora do dia
+    para um técnico específico. Horas sem registro no banco
+    aparecem como indisponíveis (ainda não configuradas).
+
+    Usada pelo painel das atendentes.
+    """
+
+    with db_cursor(dictionary=True) as (_, cursor):
+
+        cursor.execute("""
+            SELECT hora, disponivel
+            FROM disponibilidade_tecnicos
+            WHERE tecnico_id = %s
+              AND data = %s
+        """, (tecnico_id, data))
+
+        registros = cursor.fetchall()
+
+    existentes = {r["hora"]: bool(r["disponivel"]) for r in registros}
+
+    return [
+        {"hora": hora, "disponivel": existentes.get(hora, False)}
+        for hora in HORARIOS_ATENDIMENTO
+    ]
+
+
+def toggle_disponibilidade(
+    tecnico_id: int,
+    data: str,
+    hora: int
+) -> bool:
+    """
+    Alterna uma hora específica entre disponível/indisponível
+    para um técnico em uma data. Cria o registro se não existir.
+
+    Retorna o novo estado (True = ficou disponível).
+
+    Usada pelo painel das atendentes.
+    """
+
+    with db_cursor(dictionary=True) as (_, cursor):
+
+        cursor.execute("""
+            SELECT disponivel
+            FROM disponibilidade_tecnicos
+            WHERE tecnico_id = %s
+              AND data = %s
+              AND hora = %s
+        """, (tecnico_id, data, hora))
+
+        row = cursor.fetchone()
+        novo_estado = not bool(row["disponivel"]) if row else True
+
+        cursor.execute("""
+            INSERT INTO disponibilidade_tecnicos
+            (tecnico_id, data, hora, disponivel)
+            VALUES (%s, %s, %s, %s)
+            ON DUPLICATE KEY UPDATE
+                disponivel = VALUES(disponivel)
+        """, (tecnico_id, data, hora, novo_estado))
+
+    return novo_estado

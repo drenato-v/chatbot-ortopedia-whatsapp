@@ -1,0 +1,452 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Painel — Ortopedia Geral</title>
+<style>
+:root {
+  --primary:       #1557a8;
+  --primary-light: #e8f1fb;
+  --green:         #15803d;
+  --green-bg:      #dcfce7;
+  --red:           #b91c1c;
+  --red-bg:        #fee2e2;
+  --yellow-bg:     #fef9c3;
+  --yellow-text:   #854d0e;
+  --blue-bg:       #dbeafe;
+  --blue-text:     #1e40af;
+  --gray-50:       #f8fafc;
+  --gray-100:      #f1f5f9;
+  --gray-200:      #e2e8f0;
+  --gray-400:      #94a3b8;
+  --gray-600:      #475569;
+  --gray-800:      #1e293b;
+  --radius:        8px;
+  --shadow:        0 1px 4px rgba(0,0,0,.10);
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  background: var(--gray-100);
+  color: var(--gray-800);
+  min-height: 100vh;
+}
+
+/* ── Header ── */
+header {
+  background: var(--primary);
+  color: #fff;
+  padding: 14px 24px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  box-shadow: 0 2px 6px rgba(0,0,0,.18);
+}
+header h1 { font-size: 1.15rem; font-weight: 600; }
+
+/* ── Nav ── */
+nav {
+  background: #fff;
+  border-bottom: 2px solid var(--gray-200);
+  padding: 0 24px;
+  display: flex;
+}
+nav button {
+  padding: 13px 22px;
+  border: none;
+  border-bottom: 3px solid transparent;
+  margin-bottom: -2px;
+  background: none;
+  cursor: pointer;
+  font-size: .92rem;
+  font-weight: 500;
+  color: var(--gray-600);
+  transition: color .15s;
+}
+nav button.active { color: var(--primary); border-bottom-color: var(--primary); }
+nav button:hover:not(.active) { color: var(--gray-800); background: var(--gray-50); }
+
+/* ── Main ── */
+main { padding: 24px; max-width: 1080px; margin: 0 auto; }
+
+/* ── Card ── */
+.card {
+  background: #fff;
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 18px 20px;
+  margin-bottom: 18px;
+}
+
+/* ── Controls ── */
+.controls { display: flex; gap: 14px; align-items: flex-end; flex-wrap: wrap; }
+.field { display: flex; flex-direction: column; gap: 5px; }
+label { font-size: .78rem; font-weight: 600; color: var(--gray-600); text-transform: uppercase; letter-spacing: .4px; }
+select, input[type="date"] {
+  padding: 8px 11px;
+  border: 1.5px solid var(--gray-200);
+  border-radius: var(--radius);
+  font-size: .92rem;
+  background: #fff;
+  outline: none;
+  cursor: pointer;
+  min-width: 180px;
+}
+select:focus, input:focus { border-color: var(--primary); }
+
+/* ── Buttons ── */
+.btn {
+  padding: 8px 18px;
+  border-radius: var(--radius);
+  border: none;
+  cursor: pointer;
+  font-size: .88rem;
+  font-weight: 600;
+  transition: opacity .15s, transform .1s;
+}
+.btn:active { transform: scale(.97); }
+.btn:hover  { opacity: .85; }
+.btn-primary { background: var(--primary); color: #fff; }
+.btn-success { background: var(--green);   color: #fff; }
+.btn-danger  { background: var(--red);     color: #fff; }
+.btn-sm { padding: 5px 11px; font-size: .8rem; }
+
+/* ── Section title ── */
+.section-title {
+  font-size: .95rem;
+  font-weight: 600;
+  color: var(--gray-800);
+  margin-bottom: 14px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--gray-200);
+}
+
+/* ── Availability grid ── */
+.grid-disp {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+  gap: 10px;
+  margin-top: 4px;
+}
+.slot {
+  border-radius: var(--radius);
+  border: 2px solid;
+  padding: 14px 10px;
+  text-align: center;
+  cursor: pointer;
+  user-select: none;
+  transition: transform .12s, box-shadow .12s;
+}
+.slot:hover { transform: scale(1.04); box-shadow: 0 3px 10px rgba(0,0,0,.12); }
+.slot.disponivel { background: var(--green-bg); border-color: var(--green); color: var(--green); }
+.slot.ocupado    { background: var(--red-bg);   border-color: var(--red);   color: var(--red);   }
+.slot .hora-txt  { font-size: 1.05rem; font-weight: 700; }
+.slot .status-txt { font-size: .72rem; margin-top: 3px; opacity: .85; }
+
+/* ── Table ── */
+.table-wrap { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; font-size: .88rem; }
+th {
+  text-align: left;
+  padding: 9px 12px;
+  background: var(--gray-50);
+  color: var(--gray-600);
+  font-size: .75rem;
+  text-transform: uppercase;
+  letter-spacing: .5px;
+  border-bottom: 2px solid var(--gray-200);
+}
+td { padding: 11px 12px; border-bottom: 1px solid var(--gray-200); vertical-align: middle; }
+tr:last-child td { border-bottom: none; }
+tr:hover td { background: var(--gray-50); }
+
+/* ── Badges ── */
+.badge {
+  display: inline-block;
+  padding: 3px 9px;
+  border-radius: 12px;
+  font-size: .75rem;
+  font-weight: 600;
+}
+.badge-pendente   { background: var(--yellow-bg); color: var(--yellow-text); }
+.badge-confirmado { background: var(--green-bg);  color: var(--green); }
+.badge-cancelado  { background: var(--red-bg);    color: var(--red); }
+.badge-progresso  { background: var(--blue-bg);   color: var(--blue-text); }
+
+/* ── Empty / loading ── */
+.state-msg { text-align: center; padding: 40px 20px; color: var(--gray-400); }
+.state-msg .icon { font-size: 2rem; margin-bottom: 8px; }
+.state-msg .msg  { font-size: .9rem; }
+
+.actions { display: flex; gap: 6px; }
+</style>
+</head>
+<body>
+
+<header>
+  <span style="font-size:1.4rem">🦴</span>
+  <h1>Ortopedia Geral — Painel Interno</h1>
+</header>
+
+<nav>
+  <button class="active" id="btn-tab-disp"  onclick="showTab('disp')">📅 Disponibilidade</button>
+  <button id="btn-tab-agend" onclick="showTab('agend')">📋 Agendamentos</button>
+</nav>
+
+<main>
+
+  <!-- ── TAB DISPONIBILIDADE ── -->
+  <div id="tab-disp">
+    <div class="card">
+      <div class="controls">
+        <div class="field">
+          <label for="sel-tecnico">Técnico</label>
+          <select id="sel-tecnico" onchange="carregarAgenda()">
+            <option value="">Selecione...</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="inp-data-disp">Data</label>
+          <input type="date" id="inp-data-disp" onchange="carregarAgenda()">
+        </div>
+      </div>
+    </div>
+
+    <div class="card" id="card-agenda" style="display:none">
+      <p class="section-title" id="titulo-agenda">Agenda</p>
+      <div class="grid-disp" id="grid-agenda">
+        <div class="state-msg"><div class="icon">⏳</div><div class="msg">Carregando...</div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── TAB AGENDAMENTOS ── -->
+  <div id="tab-agend" style="display:none">
+    <div class="card">
+      <div class="controls">
+        <div class="field">
+          <label for="inp-data-agend">Data</label>
+          <input type="date" id="inp-data-agend" onchange="carregarAgendamentos()">
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <p class="section-title" id="titulo-agend">Agendamentos</p>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Horário</th>
+              <th>Cliente</th>
+              <th>WhatsApp</th>
+              <th>Serviço</th>
+              <th>Técnico</th>
+              <th>Status</th>
+              <th>Ações</th>
+            </tr>
+          </thead>
+          <tbody id="tbody-agend">
+            <tr><td colspan="7">
+              <div class="state-msg">
+                <div class="icon">📋</div>
+                <div class="msg">Selecione uma data para ver os agendamentos</div>
+              </div>
+            </td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+</main>
+
+<script>
+// ── Utils ──────────────────────────────────────────────────────────────────────
+const $ = id => document.getElementById(id);
+const hoje = () => new Date().toISOString().slice(0, 10);
+const fmtData = iso =>
+  new Date(iso + 'T12:00:00').toLocaleDateString('pt-BR',
+    { weekday: 'long', day: '2-digit', month: '2-digit', year: 'numeric' });
+const fmtFone = raw => {
+  if (!raw) return '—';
+  const d = String(raw).replace(/\D/g, '');
+  if (d.length >= 12)
+    return `+${d.slice(0,2)} (${d.slice(2,4)}) ${d.slice(4,9)}-${d.slice(9)}`;
+  return raw;
+};
+const badgeInfo = s => ({
+  em_progresso: { cls: 'badge-progresso', label: 'Em andamento' },
+  pendente:     { cls: 'badge-pendente',  label: 'Pendente' },
+  confirmado:   { cls: 'badge-confirmado',label: 'Confirmado' },
+  cancelado:    { cls: 'badge-cancelado', label: 'Cancelado' },
+}[s] || { cls: 'badge-pendente', label: s });
+
+// ── Tabs ───────────────────────────────────────────────────────────────────────
+function showTab(tab) {
+  $('tab-disp').style.display  = tab === 'disp'  ? 'block' : 'none';
+  $('tab-agend').style.display = tab === 'agend' ? 'block' : 'none';
+  $('btn-tab-disp').classList.toggle('active',  tab === 'disp');
+  $('btn-tab-agend').classList.toggle('active', tab === 'agend');
+}
+
+// ── Init ───────────────────────────────────────────────────────────────────────
+document.addEventListener('DOMContentLoaded', () => {
+  $('inp-data-disp').value  = hoje();
+  $('inp-data-agend').value = hoje();
+  carregarTecnicos();
+  carregarAgendamentos();
+});
+
+// ── Technicians ────────────────────────────────────────────────────────────────
+async function carregarTecnicos() {
+  try {
+    const res  = await fetch('/painel/api/tecnicos');
+    const data = await res.json();
+    const sel  = $('sel-tecnico');
+    sel.innerHTML = '<option value="">Selecione...</option>';
+    (data.tecnicos || []).forEach(t => {
+      const opt = document.createElement('option');
+      opt.value = t.id;
+      opt.textContent = `${t.nome} — ${t.setor}`;
+      sel.appendChild(opt);
+    });
+  } catch (e) {
+    console.error('Erro ao carregar técnicos:', e);
+  }
+}
+
+// ── Availability ───────────────────────────────────────────────────────────────
+async function carregarAgenda() {
+  const tid  = $('sel-tecnico').value;
+  const data = $('inp-data-disp').value;
+  if (!tid || !data) return;
+
+  $('card-agenda').style.display = 'block';
+  const nome = $('sel-tecnico').selectedOptions[0].text;
+  $('titulo-agenda').textContent = `${nome} — ${fmtData(data)}`;
+  $('grid-agenda').innerHTML = '<div class="state-msg"><div class="icon">⏳</div><div class="msg">Carregando...</div></div>';
+
+  try {
+    const res    = await fetch(`/painel/api/disponibilidade?tecnico_id=${tid}&data=${data}`);
+    const result = await res.json();
+    renderAgenda(result.agenda, tid, data);
+  } catch (e) {
+    $('grid-agenda').innerHTML = '<div class="state-msg"><div class="icon">⚠️</div><div class="msg">Erro ao carregar agenda</div></div>';
+  }
+}
+
+function renderAgenda(agenda, tid, data) {
+  const grid = $('grid-agenda');
+  if (!agenda || agenda.length === 0) {
+    grid.innerHTML = '<div class="state-msg"><div class="icon">📭</div><div class="msg">Nenhum horário cadastrado para este dia</div></div>';
+    return;
+  }
+  grid.innerHTML = '';
+  agenda.forEach(slot => {
+    const hora = slot.hora;
+    const disp = slot.disponivel;
+    const el   = document.createElement('div');
+    el.className = `slot ${disp ? 'disponivel' : 'ocupado'}`;
+    el.innerHTML = `
+      <div class="hora-txt">${String(hora).padStart(2,'0')}:00</div>
+      <div class="status-txt">${disp ? '✓ Disponível' : '✗ Indisponível'}</div>
+    `;
+    el.onclick = () => toggleSlot(tid, data, hora, el);
+    grid.appendChild(el);
+  });
+}
+
+async function toggleSlot(tid, data, hora, el) {
+  el.style.opacity = '.45';
+  el.style.pointerEvents = 'none';
+  try {
+    const res    = await fetch('/painel/api/disponibilidade/toggle', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ tecnico_id: +tid, data, hora: +hora }),
+    });
+    const result = await res.json();
+    const disp   = result.disponivel;
+    el.className = `slot ${disp ? 'disponivel' : 'ocupado'}`;
+    el.innerHTML = `
+      <div class="hora-txt">${String(hora).padStart(2,'0')}:00</div>
+      <div class="status-txt">${disp ? '✓ Disponível' : '✗ Indisponível'}</div>
+    `;
+  } catch (e) {
+    console.error('Erro ao alternar slot:', e);
+  } finally {
+    el.style.opacity = '1';
+    el.style.pointerEvents = 'auto';
+  }
+}
+
+// ── Appointments ───────────────────────────────────────────────────────────────
+async function carregarAgendamentos() {
+  const data = $('inp-data-agend').value;
+  if (!data) return;
+  $('titulo-agend').textContent = `Agendamentos — ${fmtData(data)}`;
+  const tbody = $('tbody-agend');
+  tbody.innerHTML = '<tr><td colspan="7"><div class="state-msg"><div class="icon">⏳</div><div class="msg">Carregando...</div></div></td></tr>';
+
+  try {
+    const res    = await fetch(`/painel/api/agendamentos?data=${data}`);
+    const result = await res.json();
+    renderAgendamentos(result.agendamentos || []);
+  } catch (e) {
+    tbody.innerHTML = '<tr><td colspan="7"><div class="state-msg"><div class="icon">⚠️</div><div class="msg">Erro ao carregar agendamentos</div></div></td></tr>';
+  }
+}
+
+function renderAgendamentos(lista) {
+  const tbody = $('tbody-agend');
+  if (!lista.length) {
+    tbody.innerHTML = '<tr><td colspan="7"><div class="state-msg"><div class="icon">📭</div><div class="msg">Nenhum agendamento nesta data</div></div></td></tr>';
+    return;
+  }
+  tbody.innerHTML = lista.map(a => {
+    // Prefer the `horario` column; fall back to time extracted from datetime
+    let horario = '—';
+    if (a.horario) {
+      horario = a.horario;
+    } else if (a.data_agendamento) {
+      const d = new Date(a.data_agendamento);
+      if (!isNaN(d)) horario = d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+    }
+    const b = badgeInfo(a.status);
+    const podeAcao = !['confirmado', 'cancelado'].includes(a.status);
+    return `
+      <tr>
+        <td><strong>${horario}</strong></td>
+        <td>${a.cliente_nome || '—'}</td>
+        <td>${fmtFone(a.numero_whatsapp)}</td>
+        <td>${a.tipo_consulta || '—'}</td>
+        <td>${a.tecnico_nome || '—'}</td>
+        <td><span class="badge ${b.cls}">${b.label}</span></td>
+        <td>
+          <div class="actions">
+          ${podeAcao ? `
+            <button class="btn btn-success btn-sm" onclick="atualizarStatus(${a.id},'confirmar')">✓ Confirmar</button>
+            <button class="btn btn-danger  btn-sm" onclick="atualizarStatus(${a.id},'cancelar')">✗ Cancelar</button>
+          ` : '<span style="color:var(--gray-400);font-size:.8rem">—</span>'}
+          </div>
+        </td>
+      </tr>`;
+  }).join('');
+}
+
+async function atualizarStatus(id, acao) {
+  if (!confirm(`Deseja ${acao === 'confirmar' ? 'confirmar' : 'cancelar'} este agendamento?`)) return;
+  try {
+    await fetch(`/painel/api/agendamentos/${id}/${acao}`, { method: 'POST' });
+    carregarAgendamentos();
+  } catch (e) {
+    alert('Erro ao atualizar status. Tente novamente.');
+  }
+}
+</script>
+</body>
+</html>

@@ -1,38 +1,34 @@
 from fastapi import APIRouter, Request, Query
 from fastapi.responses import PlainTextResponse, JSONResponse
-# Serviços relacionados à IA e histórico
-from services.claude_service import (
-    gerar_resposta,
-    formatar_historico,
-    salvar_historico
-)
-# Serviço responsável por enviar mensagens ao WhatsApp
-from services.whatsapp import enviar_mensagem
-# Serviço responsável por estado da conversa (sessão)
+from services.claude_service import gerar_resposta
 from services.session_service import (
-    obter_sessao,
-    atualizar_estado,
-    atualizar_dados_agendamento,
-    EstadosConversa,
-    obter_agendamento_id,
-    definir_agendamento_id
+    EstadosConversa, obter_sessao, salvar_sessao,
+    obter_agendamento_id, definir_agendamento_id
 )
-# Camada de persistência
+from services.tecnico_service import (
+    buscar_tecnico_cliente, buscar_tecnicos_disponiveis,
+    buscar_horarios_disponiveis, atribuir_tecnico_cliente,
+    marcar_hora_como_ocupada
+)
+from services.whatsapp import enviar_mensagem
 from db.mysql import (
-    buscar_cliente_por_numero,
-    criar_cliente,
-    salvar_conversa,
-    criar_agendamento_em_progresso,
-    atualizar_agendamento,
-    buscar_agendamento_em_progresso
+    buscar_cliente_por_numero, criar_cliente, salvar_conversa,
+    criar_agendamento_em_progresso, atualizar_agendamento,
 )
+from datetime import datetime
 import re
+import os
 
-# Cria agrupamento de rotas
 router = APIRouter()
 
-# Token usado pela Meta para validar o webhook
-VERIFY_TOKEN = "meu_token_secreto"
+VERIFY_TOKEN = os.getenv("VERIFY_TOKEN", "meu_token_secreto")
+
+SETORES = [
+    "Prótese", "Palmilha", "Tutor", "Órteses",
+    "Órtese Individual", "Cadeira de Rodas", "Escaneamento 3D", "Outras"
+]
+
+# ── Webhook verification ───────────────────────────────────────────────────────
 
 @router.get("/webhook")
 async def verificar_webhook(
@@ -40,245 +36,287 @@ async def verificar_webhook(
     hub_verify_token: str = Query(None, alias="hub.verify_token"),
     hub_challenge: str = Query(None, alias="hub.challenge")
 ):
-    """
-    Endpoint chamado pela Meta durante configuração do webhook.
-    Se o token estiver correto, devolve o challenge.
-    """
-
-    if (
-        hub_mode == "subscribe"
-        and hub_verify_token == VERIFY_TOKEN
-    ):
+    if hub_mode == "subscribe" and hub_verify_token == VERIFY_TOKEN:
         return PlainTextResponse(content=hub_challenge)
-    return PlainTextResponse(
-        content="Token inválido",
-        status_code=403
-    )
+    return PlainTextResponse(content="Token inválido", status_code=403)
+
+# ── Detection helpers ──────────────────────────────────────────────────────────
+
+def detectar_setor(mensagem: str) -> str:
+    msg = mensagem.lower()
+    if any(p in msg for p in ["ortese individual", "órtese individual"]):
+        return "Órtese Individual"
+    if any(p in msg for p in ["prótese", "protese", "membro artificial"]):
+        return "Prótese"
+    if any(p in msg for p in ["palmilha"]):
+        return "Palmilha"
+    if any(p in msg for p in ["tutor"]):
+        return "Tutor"
+    if any(p in msg for p in ["órtese", "ortese"]):
+        return "Órteses"
+    if any(p in msg for p in ["cadeira de rodas", "cadeira"]):
+        return "Cadeira de Rodas"
+    if any(p in msg for p in ["3d", "escaneamento", "scan"]):
+        return "Escaneamento 3D"
+    return None
+
+
+_ESTADOS_EM_FLUXO = {
+    EstadosConversa.AGENDAMENTO_PENDENTE,
+    EstadosConversa.AGUARDANDO_DATA,
+    EstadosConversa.AGUARDANDO_HORARIO,
+    EstadosConversa.AGUARDANDO_TIPO,
+}
 
 def detectar_intencao(mensagem: str, estado: str) -> str:
-    """
-    Implementa máquina de estados simples.
+    msg = mensagem.lower()
 
-    Decide para qual etapa da conversa
-    o usuário será encaminhado.
-    """
+    tem_data    = bool(re.search(r'\d{2}/\d{2}/\d{4}', mensagem))
+    tem_horario = bool(re.search(r'\d{1,2}[:h]\d{2}', mensagem))
+    tem_setor   = any(s.lower() in msg for s in SETORES)
 
-    msg_lower = mensagem.lower()
-
-    # Detecta intenção inicial de agendamento
-    if any(
-        palavra in msg_lower
-        for palavra in [
-            "agendar",
-            "marcar",
-            "consulta",
-            "appointment"
-        ]
-    ):
+    # Novo pedido de agendamento (só fora de um fluxo já em andamento)
+    if any(w in msg for w in ["agendar", "marcar", "consulta", "quero consultar"]) \
+            and estado not in _ESTADOS_EM_FLUXO:
         return EstadosConversa.AGENDAMENTO_PENDENTE
 
-
-    # Detecta preenchimento de data
-    if (
-        estado == EstadosConversa.AGUARDANDO_DATA
-        and re.search(
-            r'\d{2}/\d{2}/\d{4}',
-            mensagem
-        )
-    ):
+    # Data fornecida → avança para aguardar horário
+    if tem_data and estado in (EstadosConversa.AGUARDANDO_DATA,
+                                EstadosConversa.AGENDAMENTO_PENDENTE):
         return EstadosConversa.AGUARDANDO_HORARIO
 
-    # Detecta preenchimento de horário
-    if (
-        estado == EstadosConversa.AGUARDANDO_HORARIO
-        and re.search(
-            r'\d{1,2}[:h]\d{2}',
-            mensagem
-        )
-    ):
+    # Horário fornecido → avança para aguardar tipo (ou confirma direto)
+    if tem_horario and estado == EstadosConversa.AGUARDANDO_HORARIO:
         return EstadosConversa.AGUARDANDO_TIPO
 
-    # Detecta tipo de atendimento
-    if (
-        estado == EstadosConversa.AGUARDANDO_TIPO
-        and any(
-            palavra in msg_lower
-            for palavra in [
-                "avaliação",
-                "acompanhamento",
-                "fisioterapia",
-                "outro"
-            ]
-        )
-    ):
+    # Setor fornecido em AGUARDANDO_TIPO → confirma
+    if tem_setor and estado == EstadosConversa.AGUARDANDO_TIPO:
         return EstadosConversa.AGENDAMENTO_CONFIRMADO
 
-    # Fluxo padrão: conversa livre
+    # Setor fornecido em AGENDAMENTO_PENDENTE → permanece pendente
+    # (o handler avança para AGUARDANDO_DATA após salvar o setor)
+    if tem_setor and estado == EstadosConversa.AGENDAMENTO_PENDENTE:
+        return EstadosConversa.AGENDAMENTO_PENDENTE
+
+    # Mantém estado ativo se já em fluxo de agendamento
+    if estado in _ESTADOS_EM_FLUXO:
+        return estado
+
     return EstadosConversa.CONVERSA_LIVRE
 
 
+def formatar_horarios_para_claude(horarios: dict) -> str:
+    linhas = []
+    for data, slots in horarios.items():
+        data_fmt = datetime.strptime(data, "%Y-%m-%d").strftime("%d/%m/%Y")
+        disponiveis = [s["hora"] for s in slots if s["disponivel"]]
+        if disponiveis:
+            linhas.append(f"{data_fmt}: {', '.join(disponiveis)}")
+    if linhas:
+        return "Horários disponíveis nos próximos dias:\n" + "\n".join(linhas)
+    return "Não há horários disponíveis nos próximos 7 dias."
+
+# ── Main webhook ───────────────────────────────────────────────────────────────
+
 @router.post("/webhook")
 async def webhook(request: Request):
-    """
-    Endpoint principal.
-
-    Fluxo:
-    Meta → Webhook → Sessão →
-    Agendamento → Claude →
-    Persistência → WhatsApp
-    """
-
     try:
-        # Lê corpo da requisição
         data = await request.json()
 
-        # Extrai mensagem do formato enviado pela Meta
-        changes = (
-            data
-            .get("entry", [{}])[0]
-            .get("changes", [{}])[0]
-        )
+        changes  = data.get("entry", [{}])[0].get("changes", [{}])[0]
+        messages = changes.get("value", {}).get("messages", [])
 
-        messages = (
-            changes
-            .get("value", {})
-            .get("messages", [])
-        )
-
-
-        # Ignora eventos sem mensagem
         if not messages:
             return JSONResponse({"status": "ok"})
 
-
-        mensagem = messages[0]
+        mensagem       = messages[0]
         numero_cliente = mensagem.get("from")
-        texto_cliente = (
-            mensagem
-            .get("text", {})
-            .get("body", "")
-        )
 
-        # Evita processar payload inválido
-        if (
-            not numero_cliente
-            or not texto_cliente
-        ):
+        # Ignora mensagens não-texto (imagens, áudio, etc.)
+        if mensagem.get("type") != "text":
             return JSONResponse({"status": "ok"})
 
-        # Busca cliente ou cria registro
-        cliente = buscar_cliente_por_numero(
-            numero_cliente
-        )
+        texto_cliente = mensagem.get("text", {}).get("body", "").strip()
+        if not numero_cliente or not texto_cliente:
+            return JSONResponse({"status": "ok"})
 
+        # 1. Buscar/criar cliente ─────────────────────────────────────────────
+        cliente = buscar_cliente_por_numero(numero_cliente)
         if not cliente:
-            cliente_id = criar_cliente(
-                numero_cliente
-            )
-
+            cliente_id = criar_cliente(numero_cliente)
         else:
             cliente_id = cliente["id"]
 
+        # 2. Obter sessão ─────────────────────────────────────────────────────
+        sessao           = obter_sessao(numero_cliente)
+        estado_atual     = sessao.get("estado", EstadosConversa.INICIAL)
+        historico        = sessao.get("historico", [])
+        dados_agendamento = sessao.get("dados_agendamento", {})
 
-        # Recupera sessão ativa
-        sessao = obter_sessao(
-            numero_cliente
-        )
+        # Limpa estado após confirmação anterior
+        if estado_atual == EstadosConversa.AGENDAMENTO_CONFIRMADO:
+            estado_atual     = EstadosConversa.CONVERSA_LIVRE
+            dados_agendamento = {}
+            sessao.pop("agendamento_id", None)
 
-        estado_atual = sessao.get(
-            "estado",
-            EstadosConversa.INICIAL
-        )
+        # 3. Detectar intenção e setor ────────────────────────────────────────
+        novo_estado     = detectar_intencao(texto_cliente, estado_atual)
+        setor_detectado = detectar_setor(texto_cliente) or dados_agendamento.get("setor")
+        contexto_extra  = ""
+        agendamento_id  = obter_agendamento_id(numero_cliente)
 
-        historico = sessao.get(
-            "historico",
-            []
-        )
+        # 4. Fluxo de agendamento ─────────────────────────────────────────────
 
-        dados_agendamento = sessao.get(
-            "dados_agendamento",
-            {}
-        )
+        if novo_estado == EstadosConversa.AGENDAMENTO_PENDENTE:
+            if not agendamento_id:
+                agendamento_id = criar_agendamento_em_progresso(cliente_id)
+                definir_agendamento_id(numero_cliente, agendamento_id)
 
-        # Detecta próximo estado
-        novo_estado = detectar_intencao(
-            texto_cliente,
-            estado_atual
-        )
+            if setor_detectado:
+                dados_agendamento["setor"] = setor_detectado
+                hoje    = datetime.now().strftime("%Y-%m-%d")
+                horarios = buscar_horarios_disponiveis(setor_detectado, hoje, dias=7)
+                contexto_extra = (
+                    formatar_horarios_para_claude(horarios)
+                    + "\nPergunte ao cliente qual data deseja, no formato DD/MM/AAAA."
+                )
+                novo_estado = EstadosConversa.AGUARDANDO_DATA  # ← correção principal
+            else:
+                lista = ", ".join(SETORES)
+                contexto_extra = f"Pergunte qual serviço o cliente precisa. Opções: {lista}"
 
-        # Chama IA para gerar resposta
+        elif novo_estado == EstadosConversa.AGUARDANDO_HORARIO:
+            # Usuário acabou de fornecer a data
+            data_match = re.search(r'(\d{2}/\d{2}/\d{4})', texto_cliente)
+            if data_match:
+                data_str = data_match.group(1)
+                dados_agendamento["data"] = data_str
+                try:
+                    data_obj  = datetime.strptime(data_str, "%d/%m/%Y")
+                    data_mysql = data_obj.strftime("%Y-%m-%d")
+                    if agendamento_id:
+                        atualizar_agendamento(agendamento_id, data_agendamento=data_obj)
+                    setor = dados_agendamento.get("setor")
+                    if setor:
+                        slots_dia  = buscar_horarios_disponiveis(setor, data_mysql, dias=1)
+                        disponiveis = [
+                            s["hora"] for dia in slots_dia.values()
+                            for s in dia if s["disponivel"]
+                        ]
+                        if disponiveis:
+                            contexto_extra = (
+                                f"Horários disponíveis em {data_str}: {', '.join(disponiveis)}. "
+                                "Peça ao cliente para escolher um horário."
+                            )
+                        else:
+                            contexto_extra = (
+                                f"Não há horários disponíveis em {data_str}. "
+                                "Informe ao cliente e peça outra data."
+                            )
+                            novo_estado = EstadosConversa.AGUARDANDO_DATA
+                except ValueError:
+                    contexto_extra = "Data inválida. Peça ao cliente para informar no formato DD/MM/AAAA."
+                    novo_estado    = EstadosConversa.AGUARDANDO_DATA
+
+        elif novo_estado == EstadosConversa.AGUARDANDO_TIPO:
+            # Usuário acabou de fornecer o horário
+            horario_match = re.search(r'(\d{1,2})[:h](\d{2})', texto_cliente)
+            if horario_match:
+                hora_int    = int(horario_match.group(1))
+                horario_str = f"{hora_int:02d}:{horario_match.group(2)}"
+                dados_agendamento["horario"] = horario_str
+                dados_agendamento["hora_int"] = hora_int
+                if agendamento_id:
+                    atualizar_agendamento(agendamento_id, horario=horario_str)
+
+                # Se o setor já é conhecido, não precisa perguntar
+                if dados_agendamento.get("setor"):
+                    novo_estado = EstadosConversa.AGENDAMENTO_CONFIRMADO
+                else:
+                    lista = ", ".join(SETORES)
+                    contexto_extra = f"Pergunte qual o tipo de serviço. Opções: {lista}"
+
+        # Bloco separado (não elif) para poder ser alcançado pelo bloco acima
+        if novo_estado == EstadosConversa.AGENDAMENTO_CONFIRMADO:
+            setor    = setor_detectado or dados_agendamento.get("setor")
+            hora_int  = dados_agendamento.get("hora_int")
+            data_str  = dados_agendamento.get("data")
+            horario_str = dados_agendamento.get("horario", "")
+
+            if setor and hora_int is not None and data_str:
+                data_mysql = datetime.strptime(data_str, "%d/%m/%Y").strftime("%Y-%m-%d")
+                data_hora  = datetime.strptime(f"{data_str} {horario_str}", "%d/%m/%Y %H:%M") \
+                    if horario_str else datetime.strptime(data_str, "%d/%m/%Y")
+
+                tecnico = buscar_tecnico_cliente(cliente_id, setor)
+                if not tecnico:
+                    tecnicos = buscar_tecnicos_disponiveis(data_mysql, hora_int, setor)
+                    tecnico  = tecnicos[0] if tecnicos else None
+
+                if tecnico:
+                    atribuir_tecnico_cliente(cliente_id, tecnico["id"], setor)
+                    marcar_hora_como_ocupada(tecnico["id"], data_mysql, hora_int)
+                    if agendamento_id:
+                        atualizar_agendamento(
+                            agendamento_id,
+                            tecnico_id=tecnico["id"],
+                            tipo_consulta=setor,
+                            status="confirmado",
+                            data_agendamento=data_hora,
+                        )
+                    contexto_extra = (
+                        f"AGENDAMENTO CONFIRMADO COM SUCESSO. "
+                        f"Técnico: {tecnico['nome']} | Serviço: {setor} | "
+                        f"Data: {data_str} | Horário: {horario_str}. "
+                        "Informe os dados ao cliente, deseje um bom atendimento e encerre gentilmente."
+                    )
+                    # Limpa dados de agendamento da sessão
+                    dados_agendamento = {}
+                    sessao.pop("agendamento_id", None)
+                else:
+                    contexto_extra = (
+                        "Não há técnicos disponíveis nesse horário. "
+                        "Informe ao cliente e peça outra data ou horário."
+                    )
+                    novo_estado = EstadosConversa.AGUARDANDO_DATA
+            else:
+                contexto_extra = (
+                    "Dados incompletos. Peça novamente a data e horário ao cliente."
+                )
+                novo_estado = EstadosConversa.AGENDAMENTO_PENDENTE
+
+        # 5. Gerar resposta com Claude ─────────────────────────────────────────
+        msg_para_claude = texto_cliente
+        if contexto_extra:
+            msg_para_claude += f"\n\n[SISTEMA: {contexto_extra}]"
+
         resposta = await gerar_resposta(
             numero_cliente,
-            texto_cliente,
+            msg_para_claude,
             estado=novo_estado,
             historico=historico,
-            dados_agendamento=dados_agendamento
+            dados_agendamento=dados_agendamento,
         )
 
-        # Atualiza histórico
-        historico.append(
-            {
-                "role": "user",
-                "content": texto_cliente
-            }
-        )
+        # 6. Atualizar sessão ──────────────────────────────────────────────────
+        historico.append({"role": "user",      "content": texto_cliente})
+        historico.append({"role": "assistant", "content": resposta})
+        sessao["historico"]         = historico[-10:]
+        sessao["estado"]            = novo_estado
+        sessao["dados_agendamento"] = dados_agendamento
+        salvar_sessao(numero_cliente, sessao)
 
-        historico.append(
-            {
-                "role": "assistant",
-                "content": resposta
-            }
-        )
+        # 7. Persistir conversa ────────────────────────────────────────────────
+        salvar_conversa(cliente_id, texto_cliente, resposta)
 
+        # 8. Enviar resposta ao WhatsApp ───────────────────────────────────────
+        await enviar_mensagem(numero_cliente, resposta)
 
-        # Mantém somente últimas mensagens
-        sessao["historico"] = historico[-10:]
-
-        sessao["estado"] = novo_estado
-
-        # Salva sessão
-        from services.session_service import salvar_sessao
-
-        salvar_sessao(
-            numero_cliente,
-            sessao
-        )
-
-        # Persiste conversa
-        salvar_conversa(
-            cliente_id,
-            texto_cliente,
-            resposta
-        )
-
-        # Envia resposta ao cliente
-        await enviar_mensagem(
-            numero_cliente,
-            resposta
-        )
-
-        print(
-            f"✅ Estado: {novo_estado}"
-        )
-
-        return JSONResponse(
-            {"status": "ok"}
-        )
+        print(f"[OK] Estado={novo_estado} | Número={numero_cliente}")
+        return JSONResponse({"status": "ok"})
 
     except Exception as e:
-
-        print(
-            f"❌ Erro: {e}"
-        )
-
         import traceback
-
         traceback.print_exc()
-
-        return JSONResponse(
-            {
-                "status": "error",
-                "message": str(e)
-            },
-            status_code=500
-        )
+        print(f"[ERRO] {e}")
+        return JSONResponse({"status": "error", "message": str(e)}, status_code=500)

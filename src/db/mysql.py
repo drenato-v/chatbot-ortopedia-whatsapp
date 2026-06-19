@@ -366,3 +366,133 @@ def buscar_faq(
         cursor.close()
 
         conn.close()
+
+def adicionar_faq(
+    pergunta: str,
+    resposta: str,
+    categoria: str = None
+):
+    """
+    Insere nova entrada na FAQ.
+    """
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    try:
+        cursor.execute(
+
+            """
+            INSERT INTO faq
+            (
+                pergunta,
+                resposta,
+                categoria
+            )
+            VALUES
+            (%s, %s, %s)
+            """,
+
+            (
+                pergunta,
+                resposta,
+                categoria
+            )
+        )
+        conn.commit()
+
+    finally:
+        cursor.close()
+        conn.close()
+
+def buscar_agendamento_em_progresso(cliente_id: int) -> dict:
+    """
+    Busca o agendamento que o cliente está preenchendo
+    no momento (status em_progresso). Usada pelo webhook
+    para continuar um agendamento já iniciado.
+    """
+    conn = get_connection()
+    cursor = conn.cursor(dictionary=True)
+    try:
+        cursor.execute(
+            """
+            SELECT *
+            FROM agendamentos
+            WHERE cliente_id=%s
+            AND status='em_progresso'
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (cliente_id,)
+        )
+        return cursor.fetchone()
+    finally:
+        cursor.close()
+        conn.close()
+
+
+def listar_tecnicos(ativo: bool = True) -> list:
+    """
+    Lista técnicos cadastrados, agrupáveis por setor.
+    """
+    conn = get_connection()
+    cursor = conn.cursor(dictionary=True)
+    try:
+        cursor.execute(
+            "SELECT * FROM tecnicos WHERE ativo=%s ORDER BY setor, nome",
+            (ativo,)
+        )
+        return cursor.fetchall()
+    finally:
+        cursor.close()
+        conn.close()
+
+
+def buscar_agendamentos_por_data(data: str) -> list:
+    """
+    Lista agendamentos de um dia, já com nome do cliente
+    e nome/setor do técnico. Usada pelo painel.
+    """
+    conn = get_connection()
+    cursor = conn.cursor(dictionary=True)
+    try:
+        cursor.execute(
+            """
+            SELECT
+                a.id,
+                a.data_agendamento,
+                a.tipo_consulta,
+                a.status,
+                c.nome AS cliente_nome,
+                c.numero_whatsapp,
+                t.nome AS tecnico_nome,
+                t.setor AS tecnico_setor
+            FROM agendamentos a
+            JOIN clientes c ON a.cliente_id = c.id
+            LEFT JOIN tecnicos t ON a.tecnico_id = t.id
+            WHERE DATE(a.data_agendamento) = %s
+            ORDER BY a.data_agendamento
+            """,
+            (data,)
+        )
+        return cursor.fetchall()
+    finally:
+        cursor.close()
+        conn.close()
+
+
+def atualizar_status_agendamento(agendamento_id: int, status: str):
+    """
+    Atualiza somente o status (usada pelo painel
+    para confirmar/cancelar agendamentos).
+    """
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            "UPDATE agendamentos SET status=%s WHERE id=%s",
+            (status, agendamento_id)
+        )
+        conn.commit()
+    finally:
+        cursor.close()
+        conn.close()
