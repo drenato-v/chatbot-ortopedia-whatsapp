@@ -48,101 +48,61 @@ def gerar_system_prompt(
     )
 
     # Contexto fixo
-    prompt_base = f"""
-Você é um assistente inteligente do chatbot da Ortopedia Geral.
+    prompt_base = f"""Você é a assistente virtual da Ortopedia Geral, clínica especializada em órteses, próteses e reabilitação.
 
-OBJETIVO:
-Atender com educação,
-agendar consultas,
-responder dúvidas.
-
-INFORMAÇÕES:
-
-- Telefone: (17)99793-1926
+CLÍNICA:
+- Telefone: (17) 99793-1926
 - Horário: Segunda a sexta, 08h às 18h
-- Endereço:
-Rua General Glicério, 3841,
-São José do Rio Preto - SP
+- Endereço: Rua General Glicério, 3841 — São José do Rio Preto/SP
+
+SERVIÇOS DISPONÍVEIS:
+Prótese, Palmilha, Tutor, Órteses, Órtese Individual, Cadeira de Rodas, Escaneamento 3D (inclui colete 3D)
 
 FAQ:
-
 {faq_texto}
+
+REGRA CRÍTICA — DADOS DO SISTEMA:
+Quando a mensagem do usuário contiver um bloco [SISTEMA: ...], esse bloco traz dados em tempo real do sistema interno da clínica (horários disponíveis, confirmações, instruções de fluxo). Você DEVE usar essas informações como verdade absoluta. NUNCA diga que não tem acesso à agenda ou a horários — quando o sistema fornecer esses dados, você os tem. Responda com base neles de forma natural e amigável, sem citar o bloco [SISTEMA] literalmente.
 """
 
-    # Solicitação de data
+    if estado == "aguardando_nome":
+        return prompt_base + """
+FLUXO: Aguardando nome do paciente.
+Confirme o serviço detectado e pergunte o nome completo do paciente de forma simpática.
+"""
+
     if estado == "aguardando_data":
-
-        return (
-            prompt_base
-            +
-            """
-ESTADO:
-Usuário iniciou agendamento.
-
-Solicite somente a data.
-
-Formato:
-DD/MM/YYYY
+        return prompt_base + """
+FLUXO: Nome do paciente registrado. Aguardando data.
+Apresente os horários disponíveis que estão no bloco [SISTEMA] e peça a data desejada no formato DD/MM/AAAA.
 """
-        )
 
-    # Solicitação de horário
-    elif estado == "aguardando_horario":
-
-        return (
-            prompt_base
-            +
-            f"""
-ESTADO:
-Data escolhida:
-{dados_agendamento.get("data")}
-
-Solicite horário.
-
-Atendimento:
-08h às 18h
+    if estado == "aguardando_horario":
+        return prompt_base + f"""
+FLUXO: Data escolhida: {dados_agendamento.get("data") if dados_agendamento else ""}.
+Mostre os horários disponíveis nessa data (estão no bloco [SISTEMA]) e peça ao cliente que escolha um.
 """
-        )
 
-    # Solicitação tipo consulta
-    elif estado == "aguardando_tipo":
-
-        return (
-            prompt_base
-            +
-            f"""
-ESTADO:
-
-Data:
-{dados_agendamento.get("data")}
-
-Horário:
-{dados_agendamento.get("horario")}
-
-Pergunte:
-
-- Avaliação inicial
-- Acompanhamento
-- Fisioterapia
-- Outro
+    if estado == "aguardando_tipo":
+        return prompt_base + f"""
+FLUXO: Data {dados_agendamento.get("data") if dados_agendamento else ""}, horário {dados_agendamento.get("horario") if dados_agendamento else ""}.
+Se o serviço ainda não foi informado, pergunte qual é. Caso já esteja no bloco [SISTEMA], confirme e avance.
 """
-        )
 
-    # Conversa geral
-    else:
-
-        return (
-            prompt_base
-            +
-            """
-Responda naturalmente.
-
-Se:
-- ortopedia → responda
-- agendamento → conduza fluxo
-- dúvida → consulte FAQ
+    if estado == "agendamento_confirmado":
+        return prompt_base + """
+FLUXO: Agendamento confirmado com sucesso.
+Informe todos os dados do agendamento (paciente, serviço, técnico, data, horário) de forma clara e deseje um bom atendimento.
 """
-        )
+
+    # conversa_livre, inicial e qualquer outro estado
+    return prompt_base + """
+FLUXO: Conversa geral.
+- Responda dúvidas sobre a clínica e serviços.
+- Se o cliente perguntar sobre horários disponíveis e o bloco [SISTEMA] trouxer os dados, informe-os diretamente.
+- Se o cliente quiser agendar, conduza o fluxo de agendamento.
+- Seja breve, simpático e objetivo.
+"""
 
 async def gerar_resposta(
     numero_cliente: str,
@@ -172,7 +132,7 @@ async def gerar_resposta(
 
         response = client.messages.create(
 
-            model="claude-3-5-sonnet-20241022",
+            model="claude-sonnet-4-6",
 
             max_tokens=1024,
 

@@ -142,9 +142,37 @@ select:focus, input:focus { border-color: var(--primary); }
 }
 .slot:hover { transform: scale(1.04); box-shadow: 0 3px 10px rgba(0,0,0,.12); }
 .slot.disponivel { background: var(--green-bg); border-color: var(--green); color: var(--green); }
-.slot.ocupado    { background: var(--red-bg);   border-color: var(--red);   color: var(--red);   }
+.slot.ocupado    { background: #fef3c7;          border-color: #d97706;      color: #92400e;      }
+.slot.agendado   { background: var(--red-bg);   border-color: var(--red);   color: var(--red);   }
 .slot .hora-txt  { font-size: 1.05rem; font-weight: 700; }
 .slot .status-txt { font-size: .72rem; margin-top: 3px; opacity: .85; }
+.slot .paciente-txt { font-size: .7rem; margin-top: 2px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* ── Modal ── */
+.modal-overlay {
+  display: none; position: fixed; inset: 0;
+  background: rgba(0,0,0,.45); z-index: 1000;
+  align-items: center; justify-content: center;
+}
+.modal-overlay.open { display: flex; }
+.modal-box {
+  background: #fff; border-radius: var(--radius);
+  padding: 24px; width: 420px; max-width: 94vw;
+  box-shadow: 0 8px 32px rgba(0,0,0,.18);
+}
+.modal-box h2 { font-size: .98rem; color: var(--primary); margin-bottom: 18px; }
+.form-group { display: flex; flex-direction: column; gap: 5px; margin-bottom: 14px; }
+.form-group label { font-size: .75rem; font-weight: 600; color: var(--gray-600); text-transform: uppercase; letter-spacing: .4px; }
+.form-group input, .form-group select, .form-group textarea {
+  padding: 8px 10px; border: 1.5px solid var(--gray-200); border-radius: var(--radius);
+  font-size: .9rem; font-family: inherit; outline: none;
+}
+.form-group input:focus, .form-group select:focus, .form-group textarea:focus { border-color: var(--primary); }
+.form-group textarea { resize: vertical; min-height: 70px; }
+.modal-footer { display: flex; gap: 8px; justify-content: flex-end; margin-top: 18px; }
+.detail-row { display: flex; flex-direction: column; gap: 3px; margin-bottom: 12px; }
+.detail-row .lbl { font-size: .72rem; font-weight: 600; color: var(--gray-600); text-transform: uppercase; }
+.detail-row .val { font-size: .9rem; color: var(--gray-800); }
 
 /* ── Table ── */
 .table-wrap { overflow-x: auto; }
@@ -241,10 +269,11 @@ tr:hover td { background: var(--gray-50); }
           <thead>
             <tr>
               <th>Horário</th>
-              <th>Cliente</th>
+              <th>Paciente</th>
               <th>WhatsApp</th>
               <th>Serviço</th>
               <th>Técnico</th>
+              <th>Origem</th>
               <th>Status</th>
               <th>Ações</th>
             </tr>
@@ -263,6 +292,21 @@ tr:hover td { background: var(--gray-50); }
   </div>
 
 </main>
+
+<!-- ── Modal ── -->
+<div class="modal-overlay" id="modal-overlay">
+  <div class="modal-box">
+    <h2 id="modal-titulo"></h2>
+    <div id="modal-corpo"></div>
+    <div class="modal-footer">
+      <button class="btn" style="background:var(--gray-200);color:var(--gray-600)" onclick="fecharModal()">Fechar</button>
+      <button class="btn btn-primary" id="btn-modal-ok"     style="display:none" onclick="confirmarAgendamento()">Confirmar</button>
+      <button class="btn btn-primary" id="btn-modal-edit"   style="display:none" onclick="abrirEdicao()">Editar</button>
+      <button class="btn btn-primary" id="btn-modal-save"   style="display:none" onclick="salvarEdicao()">Salvar</button>
+      <button class="btn btn-danger"  id="btn-modal-remove" style="display:none" onclick="removerAgendamentoModal()">Remover</button>
+    </div>
+  </div>
+</div>
 
 <script>
 // ── Utils ──────────────────────────────────────────────────────────────────────
@@ -320,6 +364,9 @@ async function carregarTecnicos() {
 }
 
 // ── Availability ───────────────────────────────────────────────────────────────
+const SETORES = ['Prótese','Palmilha','Tutor','Órteses','Órtese Individual','Cadeira de Rodas','Escaneamento 3D','Outras'];
+let _modalCtx = {};
+
 async function carregarAgenda() {
   const tid  = $('sel-tecnico').value;
   const data = $('inp-data-disp').value;
@@ -342,46 +389,228 @@ async function carregarAgenda() {
 function renderAgenda(agenda, tid, data) {
   const grid = $('grid-agenda');
   if (!agenda || agenda.length === 0) {
-    grid.innerHTML = '<div class="state-msg"><div class="icon">📭</div><div class="msg">Nenhum horário cadastrado para este dia</div></div>';
+    grid.innerHTML = '<div class="state-msg"><div class="icon">📭</div><div class="msg">Nenhum horário disponível</div></div>';
     return;
   }
   grid.innerHTML = '';
   agenda.forEach(slot => {
     const hora = slot.hora;
     const disp = slot.disponivel;
+    const ag   = slot.agendamento;
     const el   = document.createElement('div');
-    el.className = `slot ${disp ? 'disponivel' : 'ocupado'}`;
-    el.innerHTML = `
-      <div class="hora-txt">${String(hora).padStart(2,'0')}:00</div>
-      <div class="status-txt">${disp ? '✓ Disponível' : '✗ Indisponível'}</div>
-    `;
-    el.onclick = () => toggleSlot(tid, data, hora, el);
+    const horaFmt = String(hora).padStart(2,'0') + ':00';
+
+    if (disp) {
+      el.className = 'slot disponivel';
+      el.innerHTML = `<div class="hora-txt">${horaFmt}</div><div class="status-txt">+ Agendar</div>`;
+      el.onclick = () => abrirFormAgendamento(tid, data, hora);
+    } else if (ag) {
+      el.className = 'slot agendado';
+      const paciente = ag.nome_paciente || ag.cliente_nome || 'Paciente';
+      el.innerHTML = `
+        <div class="hora-txt">${horaFmt}</div>
+        <div class="paciente-txt">${paciente}</div>
+        <div class="status-txt">${ag.tipo_consulta || ''}</div>`;
+      el.onclick = () => abrirDetalhesAgendamento(ag, tid, data, hora);
+    } else {
+      el.className = 'slot ocupado';
+      el.innerHTML = `<div class="hora-txt">${horaFmt}</div><div class="status-txt">✗ Bloqueado</div>`;
+      el.onclick = () => desbloquearSlot(tid, data, hora, el);
+    }
     grid.appendChild(el);
   });
 }
 
-async function toggleSlot(tid, data, hora, el) {
+// ── Modal helpers ──────────────────────────────────────────────────────────────
+function abrirModal(titulo, corpo, btns = {}) {
+  $('modal-titulo').textContent = titulo;
+  $('modal-corpo').innerHTML = corpo;
+  $('btn-modal-ok').style.display     = btns.ok     ? 'inline-block' : 'none';
+  $('btn-modal-edit').style.display   = btns.edit   ? 'inline-block' : 'none';
+  $('btn-modal-save').style.display   = btns.save   ? 'inline-block' : 'none';
+  $('btn-modal-remove').style.display = btns.remove ? 'inline-block' : 'none';
+  $('modal-overlay').classList.add('open');
+}
+function fecharModal() { $('modal-overlay').classList.remove('open'); _modalCtx = {}; }
+
+// ── Novo agendamento (slot livre) ──────────────────────────────────────────────
+async function abrirFormAgendamento(tid, data, hora) {
+  _modalCtx = { tid, data, hora };
+  const horaFmt = String(hora).padStart(2,'0') + ':00';
+  const tecNome = $('sel-tecnico').selectedOptions[0]?.text || '';
+  const opcoesSetor = SETORES.map(s => `<option value="${s}">${s}</option>`).join('');
+
+  // Carrega lista de técnicos para o segundo técnico
+  let opcoesTec2 = '<option value="">Nenhum</option>';
+  try {
+    const r = await fetch('/painel/api/tecnicos');
+    const d = await r.json();
+    opcoesTec2 += (d.tecnicos || [])
+      .filter(t => t.id !== +tid)
+      .map(t => `<option value="${t.id}">${t.nome} — ${t.setor}</option>`)
+      .join('');
+  } catch {}
+
+  abrirModal(
+    `Novo Agendamento — ${horaFmt} — ${tecNome}`,
+    `<div class="form-group">
+       <label>Nome do paciente *</label>
+       <input id="f-nome" type="text" placeholder="Nome completo" required>
+     </div>
+     <div class="form-group">
+       <label>Serviço *</label>
+       <select id="f-setor"><option value="">Selecione...</option>${opcoesSetor}</select>
+     </div>
+     <div class="form-group">
+       <label>Segundo técnico (opcional)</label>
+       <select id="f-tec2">${opcoesTec2}</select>
+     </div>
+     <div class="form-group">
+       <label>Observações</label>
+       <textarea id="f-obs" placeholder="Informações adicionais..."></textarea>
+     </div>`,
+    { ok: true }
+  );
+}
+
+async function confirmarAgendamento() {
+  const nome  = document.getElementById('f-nome')?.value.trim();
+  const setor = document.getElementById('f-setor')?.value;
+  const obs   = document.getElementById('f-obs')?.value.trim();
+  const tec2  = document.getElementById('f-tec2')?.value;
+  if (!nome)  { alert('Informe o nome do paciente.'); return; }
+  if (!setor) { alert('Selecione o serviço.'); return; }
+  const { tid, data, hora } = _modalCtx;
+  try {
+    const res = await fetch('/painel/api/agendamentos/manual', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tecnico_id: +tid, data, hora: +hora,
+                             tipo_consulta: setor, nome_paciente: nome,
+                             observacoes: obs || null,
+                             tecnico_id_2: tec2 ? +tec2 : null })
+    });
+    if (!res.ok) throw new Error();
+    fecharModal();
+    carregarAgenda();
+    carregarAgendamentos();
+  } catch { alert('Erro ao salvar agendamento. Tente novamente.'); }
+}
+
+// ── Detalhes do agendamento (slot ocupado com agendamento) ─────────────────────
+function abrirDetalhesAgendamento(ag, tid, data, hora) {
+  _modalCtx = { agId: ag.id, tid, data, hora, tec2Id: ag.tecnico_id_2 || null, ag };
+  const origem = ag.origem === 'whatsapp'
+    ? '<span class="badge badge-progresso">WhatsApp</span>'
+    : '<span class="badge badge-confirmado">Manual</span>';
+  const paciente = ag.nome_paciente || ag.cliente_nome || '—';
+  const fone  = ag.numero_whatsapp ? `<div class="detail-row"><div class="lbl">WhatsApp</div><div class="val">${fmtFone(ag.numero_whatsapp)}</div></div>` : '';
+  const obs   = ag.observacoes ? `<div class="detail-row"><div class="lbl">Observações</div><div class="val">${ag.observacoes}</div></div>` : '';
+  const tec2  = ag.tecnico_nome_2 ? `<div class="detail-row"><div class="lbl">2º Técnico</div><div class="val">${ag.tecnico_nome_2}</div></div>` : '';
+  abrirModal(
+    `Agendamento — ${String(hora).padStart(2,'0')}:00`,
+    `<div class="detail-row"><div class="lbl">Origem</div><div class="val">${origem}</div></div>
+     <div class="detail-row"><div class="lbl">Paciente</div><div class="val">${paciente}</div></div>
+     <div class="detail-row"><div class="lbl">Serviço</div><div class="val">${ag.tipo_consulta || '—'}</div></div>
+     ${tec2}${fone}${obs}`,
+    { edit: true, remove: true }
+  );
+}
+
+async function removerAgendamentoModal() {
+  if (!confirm('Deseja remover este agendamento? O horário ficará disponível novamente.')) return;
+  const { agId, tid, data, hora, tec2Id } = _modalCtx;
+  const liberar = (tecnico_id) => fetch('/painel/api/disponibilidade/liberar', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ tecnico_id, data, hora: +hora })
+  });
+  try {
+    await fetch(`/painel/api/agendamentos/${agId}/cancelar`, { method: 'POST' });
+    await liberar(+tid);
+    if (tec2Id) await liberar(+tec2Id);
+    fecharModal();
+    carregarAgenda();
+    carregarAgendamentos();
+  } catch { alert('Erro ao remover. Tente novamente.'); }
+}
+
+async function abrirEdicao() {
+  const { agId, tid, data, hora, tec2Id } = _modalCtx;
+  const ag = _modalCtx.ag;
+  const opcoesSetor = SETORES.map(s =>
+    `<option value="${s}" ${ag.tipo_consulta === s ? 'selected' : ''}>${s}</option>`
+  ).join('');
+
+  let opcoesTec2 = '<option value="">Nenhum</option>';
+  try {
+    const r = await fetch('/painel/api/tecnicos');
+    const d = await r.json();
+    opcoesTec2 += (d.tecnicos || [])
+      .filter(t => t.id !== +tid)
+      .map(t => `<option value="${t.id}" ${t.id === tec2Id ? 'selected' : ''}>${t.nome} — ${t.setor}</option>`)
+      .join('');
+  } catch {}
+
+  $('modal-corpo').innerHTML = `
+    <div class="form-group">
+      <label>Nome do paciente *</label>
+      <input id="e-nome" type="text" value="${ag.nome_paciente || ag.cliente_nome || ''}">
+    </div>
+    <div class="form-group">
+      <label>Serviço *</label>
+      <select id="e-setor"><option value="">Selecione...</option>${opcoesSetor}</select>
+    </div>
+    <div class="form-group">
+      <label>Segundo técnico</label>
+      <select id="e-tec2">${opcoesTec2}</select>
+    </div>
+    <div class="form-group">
+      <label>Observações</label>
+      <textarea id="e-obs">${ag.observacoes || ''}</textarea>
+    </div>`;
+  $('btn-modal-edit').style.display = 'none';
+  $('btn-modal-save').style.display = 'inline-block';
+}
+
+async function salvarEdicao() {
+  const nome  = document.getElementById('e-nome')?.value.trim();
+  const setor = document.getElementById('e-setor')?.value;
+  const tec2  = document.getElementById('e-tec2')?.value;
+  const obs   = document.getElementById('e-obs')?.value.trim();
+  if (!nome)  { alert('Informe o nome do paciente.'); return; }
+  if (!setor) { alert('Selecione o serviço.'); return; }
+  const { agId, data, hora, tec2Id } = _modalCtx;
+  try {
+    const res = await fetch(`/painel/api/agendamentos/${agId}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        nome_paciente: nome, tipo_consulta: setor,
+        observacoes: obs || null,
+        tecnico_id_2_old: tec2Id || null,
+        tecnico_id_2_new: tec2 ? +tec2 : null,
+        data, hora: +hora
+      })
+    });
+    if (!res.ok) throw new Error();
+    fecharModal();
+    carregarAgenda();
+    carregarAgendamentos();
+  } catch { alert('Erro ao salvar. Tente novamente.'); }
+}
+
+// ── Slot bloqueado sem agendamento ─────────────────────────────────────────────
+async function desbloquearSlot(tid, data, hora, el) {
   el.style.opacity = '.45';
   el.style.pointerEvents = 'none';
   try {
-    const res    = await fetch('/painel/api/disponibilidade/toggle', {
-      method:  'POST',
+    await fetch('/painel/api/disponibilidade/toggle', {
+      method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ tecnico_id: +tid, data, hora: +hora }),
+      body: JSON.stringify({ tecnico_id: +tid, data, hora: +hora })
     });
-    const result = await res.json();
-    const disp   = result.disponivel;
-    el.className = `slot ${disp ? 'disponivel' : 'ocupado'}`;
-    el.innerHTML = `
-      <div class="hora-txt">${String(hora).padStart(2,'0')}:00</div>
-      <div class="status-txt">${disp ? '✓ Disponível' : '✗ Indisponível'}</div>
-    `;
-  } catch (e) {
-    console.error('Erro ao alternar slot:', e);
-  } finally {
-    el.style.opacity = '1';
-    el.style.pointerEvents = 'auto';
-  }
+    carregarAgenda();
+  } catch { el.style.opacity = '1'; el.style.pointerEvents = 'auto'; }
 }
 
 // ── Appointments ───────────────────────────────────────────────────────────────
@@ -408,7 +637,6 @@ function renderAgendamentos(lista) {
     return;
   }
   tbody.innerHTML = lista.map(a => {
-    // Prefer the `horario` column; fall back to time extracted from datetime
     let horario = '—';
     if (a.horario) {
       horario = a.horario;
@@ -417,21 +645,27 @@ function renderAgendamentos(lista) {
       if (!isNaN(d)) horario = d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
     }
     const b = badgeInfo(a.status);
-    const podeAcao = !['confirmado', 'cancelado'].includes(a.status);
+    const pendente = a.status === 'pendente';
+    const origemBadge = a.origem === 'whatsapp'
+      ? '<span class="badge badge-progresso">WhatsApp</span>'
+      : '<span class="badge badge-confirmado">Manual</span>';
+    const obs = a.observacoes ? `<br><small style="color:var(--gray-400)">${a.observacoes}</small>` : '';
+    const dataAgend = a.data_agendamento ? a.data_agendamento.split('T')[0].substring(0,10) : '';
+    const horaInt   = a.horario ? parseInt(a.horario.split(':')[0], 10) : null;
+    const removerArgs = `${a.id},${a.tecnico_id || 'null'},${a.tecnico_id_2 || 'null'},'${dataAgend}',${horaInt}`;
     return `
       <tr>
         <td><strong>${horario}</strong></td>
-        <td>${a.cliente_nome || '—'}</td>
+        <td>${a.cliente_nome || '—'}${obs}</td>
         <td>${fmtFone(a.numero_whatsapp)}</td>
         <td>${a.tipo_consulta || '—'}</td>
-        <td>${a.tecnico_nome || '—'}</td>
+        <td>${a.tecnico_nome || '—'}${a.tecnico_nome_2 ? `<br><small style="color:var(--gray-400)">+ ${a.tecnico_nome_2}</small>` : ''}</td>
+        <td>${origemBadge}</td>
         <td><span class="badge ${b.cls}">${b.label}</span></td>
         <td>
           <div class="actions">
-          ${podeAcao ? `
-            <button class="btn btn-success btn-sm" onclick="atualizarStatus(${a.id},'confirmar')">✓ Confirmar</button>
-            <button class="btn btn-danger  btn-sm" onclick="atualizarStatus(${a.id},'cancelar')">✗ Cancelar</button>
-          ` : '<span style="color:var(--gray-400);font-size:.8rem">—</span>'}
+          ${pendente ? `<button class="btn btn-success btn-sm" onclick="atualizarStatus(${a.id},'confirmar')">✓ Confirmar</button>` : ''}
+          <button class="btn btn-danger btn-sm" onclick="removerDaLista(${removerArgs})">✕ Remover</button>
           </div>
         </td>
       </tr>`;
@@ -446,6 +680,21 @@ async function atualizarStatus(id, acao) {
   } catch (e) {
     alert('Erro ao atualizar status. Tente novamente.');
   }
+}
+
+async function removerDaLista(id, tecnico_id, tecnico_id_2, data, horaInt) {
+  if (!confirm('Remover este agendamento da lista?')) return;
+  const liberar = (tid) => fetch('/painel/api/disponibilidade/liberar', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ tecnico_id: tid, data, hora: horaInt })
+  });
+  try {
+    await fetch(`/painel/api/agendamentos/${id}/cancelar`, { method: 'POST' });
+    if (tecnico_id)   await liberar(tecnico_id);
+    if (tecnico_id_2) await liberar(tecnico_id_2);
+    carregarAgendamentos();
+    carregarAgenda();
+  } catch { alert('Erro ao remover. Tente novamente.'); }
 }
 </script>
 </body>

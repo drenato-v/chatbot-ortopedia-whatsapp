@@ -237,18 +237,20 @@ def criar_agendamento_em_progresso(
                 cliente_id,
                 data_agendamento,
                 tipo_consulta,
-                status
+                status,
+                origem
             )
 
             VALUES
-            (%s,%s,%s,%s)
+            (%s,%s,%s,%s,%s)
             """,
 
             (
                 cliente_id,
                 None,
                 None,
-                "em_progresso"
+                "em_progresso",
+                "whatsapp"
             )
         )
 
@@ -449,8 +451,8 @@ def listar_tecnicos(ativo: bool = True) -> list:
 
 def buscar_agendamentos_por_data(data: str) -> list:
     """
-    Lista agendamentos de um dia, já com nome do cliente
-    e nome/setor do técnico. Usada pelo painel.
+    Lista agendamentos confirmados/pendentes de um dia.
+    Inclui agendamentos do WhatsApp e manuais.
     """
     conn = get_connection()
     cursor = conn.cursor(dictionary=True)
@@ -460,21 +462,58 @@ def buscar_agendamentos_por_data(data: str) -> list:
             SELECT
                 a.id,
                 a.data_agendamento,
+                a.horario,
                 a.tipo_consulta,
                 a.status,
-                c.nome AS cliente_nome,
+                a.origem,
+                a.observacoes,
+                a.tecnico_id,
+                a.tecnico_id_2,
+                COALESCE(a.nome_paciente, c.nome) AS cliente_nome,
                 c.numero_whatsapp,
-                t.nome AS tecnico_nome,
-                t.setor AS tecnico_setor
+                t.nome  AS tecnico_nome,
+                t.setor AS tecnico_setor,
+                t2.nome AS tecnico_nome_2
             FROM agendamentos a
-            JOIN clientes c ON a.cliente_id = c.id
-            LEFT JOIN tecnicos t ON a.tecnico_id = t.id
+            LEFT JOIN clientes c  ON a.cliente_id  = c.id
+            LEFT JOIN tecnicos t  ON a.tecnico_id  = t.id
+            LEFT JOIN tecnicos t2 ON a.tecnico_id_2 = t2.id
             WHERE DATE(a.data_agendamento) = %s
-            ORDER BY a.data_agendamento
+              AND a.status NOT IN ('em_progresso', 'cancelado')
+            ORDER BY a.horario, a.data_agendamento
             """,
             (data,)
         )
         return cursor.fetchall()
+    finally:
+        cursor.close()
+        conn.close()
+
+
+def criar_agendamento_manual(
+    tecnico_id: int,
+    data_agendamento,
+    horario: str,
+    tipo_consulta: str,
+    nome_paciente: str,
+    observacoes: str = None,
+    tecnico_id_2: int = None
+) -> int:
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            """
+            INSERT INTO agendamentos
+            (tecnico_id, tecnico_id_2, data_agendamento, horario, tipo_consulta,
+             status, origem, nome_paciente, observacoes)
+            VALUES (%s, %s, %s, %s, %s, 'confirmado', 'manual', %s, %s)
+            """,
+            (tecnico_id, tecnico_id_2, data_agendamento, horario,
+             tipo_consulta, nome_paciente, observacoes)
+        )
+        conn.commit()
+        return cursor.lastrowid
     finally:
         cursor.close()
         conn.close()

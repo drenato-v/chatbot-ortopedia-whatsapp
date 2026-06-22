@@ -17,6 +17,8 @@ class EstadosConversa:
 
     AGENDAMENTO_PENDENTE = "agendamento_pendente"
 
+    AGUARDANDO_NOME = "aguardando_nome"
+
     AGUARDANDO_DATA = "aguardando_data"
 
     AGUARDANDO_HORARIO = "aguardando_horario"

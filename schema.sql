@@ -39,13 +39,16 @@ CREATE TABLE IF NOT EXISTS tecnicos (
 -- ── Agendamentos ──────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS agendamentos (
     id                INT         AUTO_INCREMENT PRIMARY KEY,
-    cliente_id        INT         NOT NULL,
+    cliente_id        INT,
     tecnico_id        INT,
     data_agendamento  DATETIME,
-    horario           VARCHAR(5),   -- ex: "09:00"
+    horario           VARCHAR(5),
     tipo_consulta     VARCHAR(50),
     status            ENUM('em_progresso','pendente','confirmado','cancelado')
                       NOT NULL DEFAULT 'em_progresso',
+    origem            ENUM('whatsapp','manual') NOT NULL DEFAULT 'whatsapp',
+    nome_paciente     VARCHAR(100),
+    observacoes       TEXT,
     created_at        TIMESTAMP   DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (cliente_id)  REFERENCES clientes(id) ON DELETE CASCADE,
     FOREIGN KEY (tecnico_id)  REFERENCES tecnicos(id) ON DELETE SET NULL
@@ -81,8 +84,3 @@ CREATE TABLE IF NOT EXISTS cliente_tecnico (
     FOREIGN KEY (cliente_id) REFERENCES clientes(id) ON DELETE CASCADE,
     FOREIGN KEY (tecnico_id) REFERENCES tecnicos(id) ON DELETE CASCADE
 );
-
--- ── Dados de exemplo (remova em produção) ────────────────────────────────────
--- Inserir um técnico de teste:
--- INSERT INTO tecnicos (nome, setor, modo_atendimento) VALUES ('Maria Silva', 'Prótese', 'individual');
--- INSERT INTO tecnicos (nome, setor, modo_atendimento) VALUES ('João Santos', 'Palmilha', 'individual');

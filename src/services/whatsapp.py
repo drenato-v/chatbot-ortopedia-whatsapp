@@ -5,22 +5,6 @@ import os
 # Tipagem opcional
 from typing import Optional
 
-# Endpoint base da API Meta
-WHATSAPP_API_URL = os.getenv(
-    "WHATSAPP_API_URL",
-    "https://graph.facebook.com/v18.0"
-)
-
-# ID do número configurado no painel Meta
-PHONE_ID = os.getenv(
-    "WHATSAPP_PHONE_ID"
-)
-
-# Token de autenticação
-WHATSAPP_TOKEN = os.getenv(
-    "WHATSAPP_TOKEN"
-)
-
 async def enviar_mensagem(
     numero_destinatario: str,
     texto: str
@@ -32,29 +16,22 @@ async def enviar_mensagem(
     Sistema → Meta → Cliente
     """
 
-    url = (
-        f"{WHATSAPP_API_URL}"
-        f"/{PHONE_ID}"
-        f"/messages"
-    )
+    api_url   = os.getenv("WHATSAPP_API_URL", "https://graph.facebook.com/v18.0")
+    phone_id  = os.getenv("WHATSAPP_PHONE_ID")
+    token     = os.getenv("WHATSAPP_TOKEN")
 
-    # Corpo da requisição
+    url = f"{api_url}/{phone_id}/messages"
+
     payload = {
-
         "messaging_product": "whatsapp",
         "to": numero_destinatario,
         "type": "text",
-        "text": {
-            "body": texto
-        }
+        "text": {"body": texto}
     }
 
-    # Cabeçalhos
     headers = {
-        "Authorization":
-            f"Bearer {WHATSAPP_TOKEN}",
-        "Content-Type":
-            "application/json"
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json"
     }
 
     # Cria conexão HTTP temporária
@@ -66,8 +43,9 @@ async def enviar_mensagem(
             headers=headers
         )
 
-    # Retorna resposta da API
-    return response.json()
+    result = response.json()
+    print(f"[WhatsApp API] status={response.status_code} body={result}")
+    return result
 
 async def enviar_template(
     numero_destinatario: str,
@@ -79,54 +57,30 @@ async def enviar_template(
     em template aprovado.
     """
 
-    url = (
-        f"{WHATSAPP_API_URL}"
-        f"/{PHONE_ID}"
-        f"/messages"
-    )
+    api_url  = os.getenv("WHATSAPP_API_URL", "https://graph.facebook.com/v18.0")
+    phone_id = os.getenv("WHATSAPP_PHONE_ID")
+    token    = os.getenv("WHATSAPP_TOKEN")
+
+    url = f"{api_url}/{phone_id}/messages"
 
     payload = {
-
-        "messaging_product":
-            "whatsapp",
-
-        "to":
-            numero_destinatario,
-        "type":
-            "template",
+        "messaging_product": "whatsapp",
+        "to": numero_destinatario,
+        "type": "template",
         "template": {
-            "name":
-                template_name,
-            "language": {
-                "code":
-                    "pt_BR"
-            }
+            "name": template_name,
+            "language": {"code": "pt_BR"}
         }
     }
 
-    # Adiciona parâmetros
-    # somente se existirem
     if parametros:
-
-        payload[
-            "template"
-        ][
-            "parameters"
-        ] = {
-
-            "body": {
-
-                "parameters":
-                    parametros
-            }
-        }
+        payload["template"]["components"] = [
+            {"type": "body", "parameters": parametros}
+        ]
 
     headers = {
-
-        "Authorization":
-            f"Bearer {WHATSAPP_TOKEN}",
-        "Content-Type":
-            "application/json"
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json"
     }
 
     async with httpx.AsyncClient() as client:
