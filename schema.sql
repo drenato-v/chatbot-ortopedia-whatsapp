@@ -41,6 +41,7 @@ CREATE TABLE IF NOT EXISTS agendamentos (
     id                INT         AUTO_INCREMENT PRIMARY KEY,
     cliente_id        INT,
     tecnico_id        INT,
+    tecnico_id_2      INT         NULL,
     data_agendamento  DATETIME,
     horario           VARCHAR(5),
     tipo_consulta     VARCHAR(50),
@@ -48,10 +49,12 @@ CREATE TABLE IF NOT EXISTS agendamentos (
                       NOT NULL DEFAULT 'em_progresso',
     origem            ENUM('whatsapp','manual') NOT NULL DEFAULT 'whatsapp',
     nome_paciente     VARCHAR(100),
+    telefone_paciente VARCHAR(20),
     observacoes       TEXT,
     created_at        TIMESTAMP   DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (cliente_id)  REFERENCES clientes(id) ON DELETE CASCADE,
-    FOREIGN KEY (tecnico_id)  REFERENCES tecnicos(id) ON DELETE SET NULL
+    FOREIGN KEY (cliente_id)   REFERENCES clientes(id)  ON DELETE CASCADE,
+    FOREIGN KEY (tecnico_id)   REFERENCES tecnicos(id)  ON DELETE SET NULL,
+    FOREIGN KEY (tecnico_id_2) REFERENCES tecnicos(id)  ON DELETE SET NULL
 );
 
 -- ── Conversas ─────────────────────────────────────────────────────────────────

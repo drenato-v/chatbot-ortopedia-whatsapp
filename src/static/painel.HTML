@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Painel — Ortopedia Geral</title>
+<title>Ortopedia Geral - Painel</title>
 <style>
 :root {
   --primary:       #1557a8;
@@ -215,13 +215,13 @@ tr:hover td { background: var(--gray-50); }
 <body>
 
 <header>
-  <span style="font-size:1.4rem">🦴</span>
-  <h1>Ortopedia Geral — Painel Interno</h1>
+  <h1>Ortopedia Geral</h1>
 </header>
 
 <nav>
-  <button class="active" id="btn-tab-disp"  onclick="showTab('disp')">📅 Disponibilidade</button>
-  <button id="btn-tab-agend" onclick="showTab('agend')">📋 Agendamentos</button>
+  <button class="active" id="btn-tab-disp"  onclick="showTab('disp')"> Disponibilidade </button>
+  <button id="btn-tab-pend" onclick="showTab('pend')"> Pendentes <span id="badge-pend" style="display:none;background:#dc2626;color:#fff;border-radius:10px;padding:1px 7px;font-size:.75rem;margin-left:4px">0</span></button>
+  <button id="btn-tab-agend" onclick="showTab('agend')"> Agendamentos </button>
 </nav>
 
 <main>
@@ -247,6 +247,42 @@ tr:hover td { background: var(--gray-50); }
       <p class="section-title" id="titulo-agenda">Agenda</p>
       <div class="grid-disp" id="grid-agenda">
         <div class="state-msg"><div class="icon">⏳</div><div class="msg">Carregando...</div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── TAB PENDENTES ── -->
+  <div id="tab-pend" style="display:none">
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <p class="section-title" style="margin-bottom:0">Solicitações aguardando confirmação</p>
+        <button class="btn btn-primary btn-sm" onclick="carregarPendentes()">↺ Atualizar</button>
+      </div>
+    </div>
+    <div class="card">
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Data</th>
+              <th>Horário</th>
+              <th>Paciente</th>
+              <th>WhatsApp</th>
+              <th>Serviço</th>
+              <th>Técnico</th>
+              <th>Origem</th>
+              <th>Ações</th>
+            </tr>
+          </thead>
+          <tbody id="tbody-pend">
+            <tr><td colspan="8">
+              <div class="state-msg">
+                <div class="icon">⏳</div>
+                <div class="msg">Carregando...</div>
+              </div>
+            </td></tr>
+          </tbody>
+        </table>
       </div>
     </div>
   </div>
@@ -302,7 +338,7 @@ tr:hover td { background: var(--gray-50); }
       <button class="btn" style="background:var(--gray-200);color:var(--gray-600)" onclick="fecharModal()">Fechar</button>
       <button class="btn btn-primary" id="btn-modal-ok"     style="display:none" onclick="confirmarAgendamento()">Confirmar</button>
       <button class="btn btn-primary" id="btn-modal-edit"   style="display:none" onclick="abrirEdicao()">Editar</button>
-      <button class="btn btn-primary" id="btn-modal-save"   style="display:none" onclick="salvarEdicao()">Salvar</button>
+      <button class="btn btn-primary" id="btn-modal-save"   style="display:none">Salvar</button>
       <button class="btn btn-danger"  id="btn-modal-remove" style="display:none" onclick="removerAgendamentoModal()">Remover</button>
     </div>
   </div>
@@ -310,18 +346,28 @@ tr:hover td { background: var(--gray-50); }
 
 <script>
 // ── Utils ──────────────────────────────────────────────────────────────────────
-const $ = id => document.getElementById(id);
-const hoje = () => new Date().toISOString().slice(0, 10);
+const $ = id => document.getElementById(id);  // Atalho para getElementById
+
+const hoje = () => new Date().toISOString().slice(0, 10);  // Data atual em YYYY-MM-DD
+
+// Formata ISO date para "sexta-feira, 27/06/2026".
+// T12:00:00 evita o bug de fuso horário que deslocaria o dia ao usar meia-noite UTC.
 const fmtData = iso =>
   new Date(iso + 'T12:00:00').toLocaleDateString('pt-BR',
     { weekday: 'long', day: '2-digit', month: '2-digit', year: 'numeric' });
+
+// Formata número bruto para "+55 (17) 99999-9999".
+// Aceita tanto o número do WhatsApp (armazenado com DDI) quanto telefone informado pelo paciente.
 const fmtFone = raw => {
   if (!raw) return '—';
-  const d = String(raw).replace(/\D/g, '');
-  if (d.length >= 12)
+  const d = String(raw).replace(/\D/g, '');  // Remove tudo que não for dígito
+  if (d.length >= 12)                         // Número com DDI (≥ 12 dígitos): formata com código de país
     return `+${d.slice(0,2)} (${d.slice(2,4)}) ${d.slice(4,9)}-${d.slice(9)}`;
-  return raw;
+  return raw;  // Formato desconhecido: exibe como recebido
 };
+
+// Mapeia status de agendamento para classe CSS e label legível.
+// Fallback: badge pendente com o valor bruto (evita tela em branco em status inesperado).
 const badgeInfo = s => ({
   em_progresso: { cls: 'badge-progresso', label: 'Em andamento' },
   pendente:     { cls: 'badge-pendente',  label: 'Pendente' },
@@ -330,29 +376,38 @@ const badgeInfo = s => ({
 }[s] || { cls: 'badge-pendente', label: s });
 
 // ── Tabs ───────────────────────────────────────────────────────────────────────
+// Exibe a aba selecionada e oculta as demais. Recarrega dados ao trocar de aba.
 function showTab(tab) {
-  $('tab-disp').style.display  = tab === 'disp'  ? 'block' : 'none';
-  $('tab-agend').style.display = tab === 'agend' ? 'block' : 'none';
-  $('btn-tab-disp').classList.toggle('active',  tab === 'disp');
-  $('btn-tab-agend').classList.toggle('active', tab === 'agend');
+  ['disp','pend','agend'].forEach(t => {
+    $('tab-' + t).style.display = tab === t ? 'block' : 'none';
+    $('btn-tab-' + t).classList.toggle('active', tab === t);
+  });
+  if (tab === 'pend')  carregarPendentes();     // Pendentes sempre frescos ao abrir a aba
+  if (tab === 'agend') carregarAgendamentos();  // Agendamentos do dia selecionado ao abrir a aba
 }
 
 // ── Init ───────────────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
-  $('inp-data-disp').value  = hoje();
-  $('inp-data-agend').value = hoje();
-  carregarTecnicos();
-  carregarAgendamentos();
+  $('inp-data-disp').value  = hoje();   // Inicia seletor de data da agenda com hoje
+  $('inp-data-agend').value = hoje();   // Inicia seletor de data dos agendamentos com hoje
+  carregarTecnicos();       // Popula o select de técnicos
+  carregarAgendamentos();   // Carrega agendamentos de hoje na aba Agendamentos
+  carregarPendentes();      // Carrega pendentes imediatamente ao abrir o painel
+  setInterval(carregarPendentes, 30000);  // Polling a cada 30s para não precisar refresh manual
 });
 
 // ── Technicians ────────────────────────────────────────────────────────────────
+// Carrega todos os técnicos ativos e popula o select da aba Disponibilidade.
+// Armazena em _todosTecnicos para reutilizar nos dropdowns de pendentes/edição
+// sem fazer uma nova requisição a cada renderização.
 async function carregarTecnicos() {
   try {
     const res  = await fetch('/painel/api/tecnicos');
     const data = await res.json();
+    _todosTecnicos = data.tecnicos || [];  // Cache global para dropdowns de troca de técnico
     const sel  = $('sel-tecnico');
     sel.innerHTML = '<option value="">Selecione...</option>';
-    (data.tecnicos || []).forEach(t => {
+    _todosTecnicos.forEach(t => {
       const opt = document.createElement('option');
       opt.value = t.id;
       opt.textContent = `${t.nome} — ${t.setor}`;
@@ -364,13 +419,18 @@ async function carregarTecnicos() {
 }
 
 // ── Availability ───────────────────────────────────────────────────────────────
+// Lista de serviços oferecidos pela clínica — espelha os valores aceitos no banco.
 const SETORES = ['Prótese','Palmilha','Tutor','Órteses','Órtese Individual','Cadeira de Rodas','Escaneamento 3D','Outras'];
-let _modalCtx = {};
 
+let _modalCtx      = {};   // Contexto do modal aberto (agId, tid, data, hora, ag…)
+let _todosTecnicos = [];   // Cache de todos os técnicos ativos (carregado uma vez no init)
+let _agendamentos  = [];   // Lista atual da aba Agendamentos (usada por abrirEdicaoAgendamento)
+
+// Busca e renderiza a agenda do técnico selecionado para a data selecionada.
 async function carregarAgenda() {
   const tid  = $('sel-tecnico').value;
   const data = $('inp-data-disp').value;
-  if (!tid || !data) return;
+  if (!tid || !data) return;  // Não carrega se técnico ou data ainda não estiverem selecionados
 
   $('card-agenda').style.display = 'block';
   const nome = $('sel-tecnico').selectedOptions[0].text;
@@ -386,6 +446,11 @@ async function carregarAgenda() {
   }
 }
 
+// Renderiza os slots da agenda como cartões clicáveis no grid.
+// Cada slot tem um dos três estados:
+//   disponivel → verde, clique abre formulário de novo agendamento
+//   agendado   → azul, clique abre detalhes do agendamento existente
+//   ocupado    → vermelho, bloqueio manual, clique oferece desbloqueio
 function renderAgenda(agenda, tid, data) {
   const grid = $('grid-agenda');
   if (!agenda || agenda.length === 0) {
@@ -394,17 +459,19 @@ function renderAgenda(agenda, tid, data) {
   }
   grid.innerHTML = '';
   agenda.forEach(slot => {
-    const hora = slot.hora;
-    const disp = slot.disponivel;
-    const ag   = slot.agendamento;
-    const el   = document.createElement('div');
+    const hora    = slot.hora;
+    const disp    = slot.disponivel;
+    const ag      = slot.agendamento;
+    const el      = document.createElement('div');
     const horaFmt = String(hora).padStart(2,'0') + ':00';
 
     if (disp) {
+      // Slot livre: atendente pode criar um agendamento manual
       el.className = 'slot disponivel';
       el.innerHTML = `<div class="hora-txt">${horaFmt}</div><div class="status-txt">+ Agendar</div>`;
       el.onclick = () => abrirFormAgendamento(tid, data, hora);
     } else if (ag) {
+      // Slot com agendamento: exibe nome e tipo do paciente
       el.className = 'slot agendado';
       const paciente = ag.nome_paciente || ag.cliente_nome || 'Paciente';
       el.innerHTML = `
@@ -413,6 +480,7 @@ function renderAgenda(agenda, tid, data) {
         <div class="status-txt">${ag.tipo_consulta || ''}</div>`;
       el.onclick = () => abrirDetalhesAgendamento(ag, tid, data, hora);
     } else {
+      // Bloqueio manual sem agendamento: atendente pode desbloquear
       el.className = 'slot ocupado';
       el.innerHTML = `<div class="hora-txt">${horaFmt}</div><div class="status-txt">✗ Bloqueado</div>`;
       el.onclick = () => desbloquearSlot(tid, data, hora, el);
@@ -422,6 +490,8 @@ function renderAgenda(agenda, tid, data) {
 }
 
 // ── Modal helpers ──────────────────────────────────────────────────────────────
+// Abre o modal reutilizável com título, corpo HTML e visibilidade dos botões.
+// btns: objeto com chaves ok/edit/save/remove indicando quais botões exibir.
 function abrirModal(titulo, corpo, btns = {}) {
   $('modal-titulo').textContent = titulo;
   $('modal-corpo').innerHTML = corpo;
@@ -431,16 +501,20 @@ function abrirModal(titulo, corpo, btns = {}) {
   $('btn-modal-remove').style.display = btns.remove ? 'inline-block' : 'none';
   $('modal-overlay').classList.add('open');
 }
+
+// Fecha o modal e limpa o contexto para evitar dados obsoletos em próxima abertura.
 function fecharModal() { $('modal-overlay').classList.remove('open'); _modalCtx = {}; }
 
 // ── Novo agendamento (slot livre) ──────────────────────────────────────────────
+// Abre o formulário para criar um agendamento manual no slot livre clicado.
+// Usa _todosTecnicos global para o select de segundo técnico (sem nova requisição).
 async function abrirFormAgendamento(tid, data, hora) {
   _modalCtx = { tid, data, hora };
   const horaFmt = String(hora).padStart(2,'0') + ':00';
   const tecNome = $('sel-tecnico').selectedOptions[0]?.text || '';
   const opcoesSetor = SETORES.map(s => `<option value="${s}">${s}</option>`).join('');
 
-  // Carrega lista de técnicos para o segundo técnico
+  // Filtra o técnico principal do select de segundo técnico para evitar duplicação
   let opcoesTec2 = '<option value="">Nenhum</option>';
   try {
     const r = await fetch('/painel/api/tecnicos');
@@ -473,6 +547,8 @@ async function abrirFormAgendamento(tid, data, hora) {
   );
 }
 
+// Salva o agendamento manual criado pela atendente (origem='manual', status='confirmado').
+// Após salvar, atualiza tanto a grade da agenda quanto a lista de agendamentos.
 async function confirmarAgendamento() {
   const nome  = document.getElementById('f-nome')?.value.trim();
   const setor = document.getElementById('f-setor')?.value;
@@ -492,18 +568,21 @@ async function confirmarAgendamento() {
     });
     if (!res.ok) throw new Error();
     fecharModal();
-    carregarAgenda();
-    carregarAgendamentos();
+    carregarAgenda();          // Atualiza grade para refletir slot ocupado
+    carregarAgendamentos();    // Atualiza aba Agendamentos com o novo registro
   } catch { alert('Erro ao salvar agendamento. Tente novamente.'); }
 }
 
 // ── Detalhes do agendamento (slot ocupado com agendamento) ─────────────────────
+// Exibe modal somente-leitura com os dados do agendamento existente.
+// Armazena contexto completo em _modalCtx para que editar/remover funcionem sem re-buscar.
 function abrirDetalhesAgendamento(ag, tid, data, hora) {
   _modalCtx = { agId: ag.id, tid, data, hora, tec2Id: ag.tecnico_id_2 || null, ag };
   const origem = ag.origem === 'whatsapp'
     ? '<span class="badge badge-progresso">WhatsApp</span>'
     : '<span class="badge badge-confirmado">Manual</span>';
   const paciente = ag.nome_paciente || ag.cliente_nome || '—';
+  // Exibe WhatsApp somente se disponível (agendamentos manuais não têm)
   const fone  = ag.numero_whatsapp ? `<div class="detail-row"><div class="lbl">WhatsApp</div><div class="val">${fmtFone(ag.numero_whatsapp)}</div></div>` : '';
   const obs   = ag.observacoes ? `<div class="detail-row"><div class="lbl">Observações</div><div class="val">${ag.observacoes}</div></div>` : '';
   const tec2  = ag.tecnico_nome_2 ? `<div class="detail-row"><div class="lbl">2º Técnico</div><div class="val">${ag.tecnico_nome_2}</div></div>` : '';
@@ -517,6 +596,8 @@ function abrirDetalhesAgendamento(ag, tid, data, hora) {
   );
 }
 
+// Remove o agendamento aberto no modal e libera os slots dos técnicos envolvidos.
+// Libera técnico principal e, se existir, o segundo técnico.
 async function removerAgendamentoModal() {
   if (!confirm('Deseja remover este agendamento? O horário ficará disponível novamente.')) return;
   const { agId, tid, data, hora, tec2Id } = _modalCtx;
@@ -527,13 +608,16 @@ async function removerAgendamentoModal() {
   try {
     await fetch(`/painel/api/agendamentos/${agId}/cancelar`, { method: 'POST' });
     await liberar(+tid);
-    if (tec2Id) await liberar(+tec2Id);
+    if (tec2Id) await liberar(+tec2Id);  // Libera segundo técnico se houver
     fecharModal();
     carregarAgenda();
     carregarAgendamentos();
   } catch { alert('Erro ao remover. Tente novamente.'); }
 }
 
+// Substitui o corpo do modal de detalhes por um formulário de edição (aba Disponibilidade).
+// btn-modal-save recebe onclick=salvarEdicao dinamicamente para não conflitar com
+// salvarEdicaoAgendamento usado na aba Agendamentos — ambas usam o mesmo botão.
 async function abrirEdicao() {
   const { agId, tid, data, hora, tec2Id } = _modalCtx;
   const ag = _modalCtx.ag;
@@ -541,6 +625,7 @@ async function abrirEdicao() {
     `<option value="${s}" ${ag.tipo_consulta === s ? 'selected' : ''}>${s}</option>`
   ).join('');
 
+  // Filtra técnico principal do select de segundo técnico; pré-seleciona o atual
   let opcoesTec2 = '<option value="">Nenhum</option>';
   try {
     const r = await fetch('/painel/api/tecnicos');
@@ -568,10 +653,14 @@ async function abrirEdicao() {
       <label>Observações</label>
       <textarea id="e-obs">${ag.observacoes || ''}</textarea>
     </div>`;
-  $('btn-modal-edit').style.display = 'none';
-  $('btn-modal-save').style.display = 'inline-block';
+  $('btn-modal-edit').style.display  = 'none';
+  $('btn-modal-save').style.display  = 'inline-block';
+  $('btn-modal-save').onclick        = salvarEdicao;  // Vincula handler correto para este contexto
 }
 
+// Envia edição do agendamento aberto na grade (aba Disponibilidade).
+// Gerencia troca de segundo técnico via tecnico_id_2_old/new para o backend
+// liberar o slot antigo e ocupar o novo.
 async function salvarEdicao() {
   const nome  = document.getElementById('e-nome')?.value.trim();
   const setor = document.getElementById('e-setor')?.value;
@@ -587,8 +676,8 @@ async function salvarEdicao() {
       body: JSON.stringify({
         nome_paciente: nome, tipo_consulta: setor,
         observacoes: obs || null,
-        tecnico_id_2_old: tec2Id || null,
-        tecnico_id_2_new: tec2 ? +tec2 : null,
+        tecnico_id_2_old: tec2Id || null,           // Técnico secundário antes da edição
+        tecnico_id_2_new: tec2 ? +tec2 : null,      // Técnico secundário após a edição
         data, hora: +hora
       })
     });
@@ -599,7 +688,102 @@ async function salvarEdicao() {
   } catch { alert('Erro ao salvar. Tente novamente.'); }
 }
 
+// ── Edição de agendamento (aba Agendamentos) ───────────────────────────────────
+// Abre o modal de edição a partir da aba Agendamentos, permitindo alterar:
+// nome, telefone, serviço, horário e técnico principal.
+// Usa _agendamentos (cache da última renderização) para evitar nova requisição.
+function abrirEdicaoAgendamento(id) {
+  const a = _agendamentos.find(x => x.id === id);
+  if (!a) return;
+  const data    = a.data_agendamento ? a.data_agendamento.split('T')[0].substring(0, 10) : '';
+  const horaInt = a.horario ? parseInt(a.horario.split(':')[0], 10) : null;
+  // Armazena IDs antigos de técnicos para que o backend possa liberar slots corretos ao salvar
+  _modalCtx = { agId: a.id, data, hora: horaInt, tecId: a.tecnico_id || null, tec2Id: a.tecnico_id_2 || null, ag: a };
+
+  const opcoesSetor = SETORES.map(s =>
+    `<option value="${s}" ${a.tipo_consulta === s ? 'selected' : ''}>${s}</option>`
+  ).join('');
+  // _todosTecnicos já carregado no init: evita requisição extra ao abrir o modal
+  const opcoesTec = _todosTecnicos.map(t =>
+    `<option value="${t.id}" ${t.id === a.tecnico_id ? 'selected' : ''}>${t.nome} — ${t.setor}</option>`
+  ).join('');
+
+  $('modal-titulo').textContent = 'Editar Agendamento';
+  $('modal-corpo').innerHTML = `
+    <div class="form-group">
+      <label>Nome do paciente *</label>
+      <input id="ea-nome" type="text" value="${(a.nome_paciente || a.cliente_nome || '').replace(/"/g,'&quot;')}">
+    </div>
+    <div class="form-group">
+      <label>Telefone</label>
+      <input id="ea-tel" type="tel" value="${a.telefone_paciente || ''}">
+    </div>
+    <div class="form-group">
+      <label>Serviço *</label>
+      <select id="ea-setor"><option value="">Selecione...</option>${opcoesSetor}</select>
+    </div>
+    <div class="form-group">
+      <label>Horário</label>
+      <input id="ea-horario" type="time" value="${a.horario || ''}">
+    </div>
+    <div class="form-group">
+      <label>Técnico</label>
+      <select id="ea-tecnico"><option value="">— sem técnico —</option>${opcoesTec}</select>
+    </div>
+    <div class="form-group">
+      <label>Observações</label>
+      <textarea id="ea-obs">${a.observacoes || ''}</textarea>
+    </div>`;
+  $('btn-modal-ok').style.display     = 'none';
+  $('btn-modal-edit').style.display   = 'none';
+  $('btn-modal-save').style.display   = 'inline-block';
+  $('btn-modal-save').onclick         = salvarEdicaoAgendamento;  // Handler específico desta aba
+  $('btn-modal-remove').style.display = 'none';
+  $('modal-overlay').classList.add('open');
+}
+
+// Salva as alterações do agendamento editado na aba Agendamentos.
+// Envia tecnico_id_old/new e horario_new para que o backend gerencie
+// automaticamente a liberação e ocupação dos slots corretos.
+async function salvarEdicaoAgendamento() {
+  const nome    = document.getElementById('ea-nome')?.value.trim();
+  const tel     = document.getElementById('ea-tel')?.value.trim();
+  const setor   = document.getElementById('ea-setor')?.value;
+  const horario = document.getElementById('ea-horario')?.value;
+  const tecId   = document.getElementById('ea-tecnico')?.value;
+  const obs     = document.getElementById('ea-obs')?.value.trim();
+  if (!nome)  { alert('Informe o nome do paciente.'); return; }
+  if (!setor) { alert('Selecione o serviço.'); return; }
+  const { agId, data, hora, tecId: oldTecId, tec2Id } = _modalCtx;
+  try {
+    const res = await fetch(`/painel/api/agendamentos/${agId}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        nome_paciente:     nome,
+        tipo_consulta:     setor,
+        telefone_paciente: tel  || null,
+        horario_new:       horario || null,          // Novo horário; null = mantém o atual
+        observacoes:       obs  || null,
+        tecnico_id_old:    oldTecId  || null,        // Técnico principal antes da edição
+        tecnico_id_new:    tecId ? +tecId : null,    // Técnico principal após a edição
+        tecnico_id_2_old:  tec2Id || null,           // Segundo técnico (mantido igual aqui)
+        tecnico_id_2_new:  tec2Id || null,
+        data,
+        hora: hora || 0
+      })
+    });
+    if (!res.ok) throw new Error();
+    fecharModal();
+    carregarAgendamentos();  // Atualiza lista principal
+    carregarAgenda();        // Atualiza grade se a aba Disponibilidade estiver visível
+  } catch { alert('Erro ao salvar. Tente novamente.'); }
+}
+
 // ── Slot bloqueado sem agendamento ─────────────────────────────────────────────
+// Alterna um slot de bloqueado para disponível ao clicar no cartão vermelho.
+// Desativa o elemento visualmente durante a requisição para dar feedback imediato
+// e evitar cliques duplos; restaura em caso de erro.
 async function desbloquearSlot(tid, data, hora, el) {
   el.style.opacity = '.45';
   el.style.pointerEvents = 'none';
@@ -609,8 +793,111 @@ async function desbloquearSlot(tid, data, hora, el) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ tecnico_id: +tid, data, hora: +hora })
     });
-    carregarAgenda();
-  } catch { el.style.opacity = '1'; el.style.pointerEvents = 'auto'; }
+    carregarAgenda();  // Recarrega a grade para refletir o novo estado do slot
+  } catch { el.style.opacity = '1'; el.style.pointerEvents = 'auto'; }  // Restaura em caso de falha
+}
+
+// ── Pending appointments ───────────────────────────────────────────────────────
+// Busca solicitações pendentes (de qualquer data) e atualiza o badge no cabeçalho da aba.
+// Chamado no init e a cada 30s (polling) para manter o contador sempre atualizado.
+async function carregarPendentes() {
+  const tbody = $('tbody-pend');
+  try {
+    const res    = await fetch('/painel/api/agendamentos/pendentes');
+    const result = await res.json();
+    const lista  = result.agendamentos || [];
+    // Badge com contador: visível somente quando há pendentes
+    const badge = $('badge-pend');
+    if (lista.length > 0) {
+      badge.textContent = lista.length;
+      badge.style.display = 'inline';
+    } else {
+      badge.style.display = 'none';  // Oculta badge quando não há pendentes
+    }
+    renderPendentes(lista, tbody);
+  } catch (e) {
+    tbody.innerHTML = '<tr><td colspan="8"><div class="state-msg"><div class="icon">⚠️</div><div class="msg">Erro ao carregar pendentes</div></div></td></tr>';
+  }
+}
+
+// Renderiza a tabela de pendentes.
+// Inclui um select de técnico por linha para que a atendente possa trocar o técnico
+// antes de confirmar — o ID selecionado é lido em confirmarPendente().
+function renderPendentes(lista, tbody) {
+  if (!lista.length) {
+    tbody.innerHTML = '<tr><td colspan="8"><div class="state-msg"><div class="icon">✅</div><div class="msg">Nenhuma solicitação pendente</div></div></td></tr>';
+    return;
+  }
+  tbody.innerHTML = lista.map(a => {
+    const dataIso  = a.data_agendamento ? a.data_agendamento.split('T')[0].substring(0,10) : '';
+    const dataFmt  = dataIso ? fmtData(dataIso) : '—';
+    // Usa horario armazenado; fallback para hora extraída de data_agendamento
+    const horario  = a.horario || (a.data_agendamento
+      ? new Date(a.data_agendamento).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
+      : '—');
+    const origemBadge = a.origem === 'whatsapp'
+      ? '<span class="badge badge-progresso">WhatsApp</span>'
+      : '<span class="badge badge-confirmado">Manual</span>';
+    const horaInt = a.horario ? parseInt(a.horario.split(':')[0], 10) : null;
+    return `
+      <tr>
+        <td>${dataFmt}</td>
+        <td><strong>${horario}</strong></td>
+        <td>${a.cliente_nome || '—'}</td>
+        <td>${fmtFone(a.telefone_paciente || a.numero_whatsapp)}</td>
+        <td>${a.tipo_consulta || '—'}</td>
+        <td>
+          <!-- Select de técnico: pré-selecionado com o técnico original; atendente pode trocar antes de confirmar -->
+          <select id="tec-pend-${a.id}" class="form-select form-select-sm" style="min-width:140px">
+            <option value="">— sem técnico —</option>
+            ${_todosTecnicos.map(t => `<option value="${t.id}"${t.id === a.tecnico_id ? ' selected' : ''}>${t.nome}</option>`).join('')}
+          </select>
+        </td>
+        <td>${origemBadge}</td>
+        <td>
+          <div class="actions">
+            <button class="btn btn-success btn-sm" onclick="confirmarPendente(${a.id})">✓ Confirmar</button>
+            <button class="btn btn-danger  btn-sm" onclick="recusarPendente(${a.id},${a.tecnico_id||'null'},${a.tecnico_id_2||'null'},'${dataIso}',${horaInt})">✕ Recusar</button>
+          </div>
+        </td>
+      </tr>`;
+  }).join('');
+}
+
+// Confirma o agendamento e notifica o cliente via WhatsApp.
+// Lê o select de técnico da linha para enviar um possível tecnico_id alternativo.
+// O backend libera o slot do técnico antigo e ocupa o do novo se houver troca.
+async function confirmarPendente(id) {
+  if (!confirm('Confirmar este agendamento? O cliente será notificado pelo WhatsApp.')) return;
+  const sel = document.getElementById(`tec-pend-${id}`);
+  const tecnico_id = sel ? (sel.value ? parseInt(sel.value, 10) : null) : null;
+  try {
+    await fetch(`/painel/api/agendamentos/${id}/confirmar`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tecnico_id })  // null = mantém o técnico original
+    });
+    carregarPendentes();      // Remove da lista de pendentes
+    carregarAgendamentos();   // Aparece na aba Agendamentos como confirmado
+  } catch { alert('Erro ao confirmar. Tente novamente.'); }
+}
+
+// Recusa o agendamento e libera os slots bloqueados dos técnicos envolvidos.
+// Técnico_id e tecnico_id_2 são passados como args inline para evitar nova busca;
+// horaInt é passado como inteiro pois a API de disponibilidade espera número inteiro.
+async function recusarPendente(id, tecnico_id, tecnico_id_2, data, horaInt) {
+  if (!confirm('Recusar esta solicitação? O cliente será notificado pelo WhatsApp.')) return;
+  const liberar = (tid) => fetch('/painel/api/disponibilidade/liberar', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ tecnico_id: tid, data, hora: horaInt })
+  });
+  try {
+    await fetch(`/painel/api/agendamentos/${id}/cancelar`, { method: 'POST' });
+    if (tecnico_id)   await liberar(tecnico_id);    // Libera slot do técnico principal
+    if (tecnico_id_2) await liberar(tecnico_id_2);  // Libera slot do segundo técnico, se houver
+    carregarPendentes();
+    carregarAgendamentos();
+  } catch { alert('Erro ao recusar. Tente novamente.'); }
 }
 
 // ── Appointments ───────────────────────────────────────────────────────────────
@@ -631,6 +918,7 @@ async function carregarAgendamentos() {
 }
 
 function renderAgendamentos(lista) {
+  _agendamentos = lista;
   const tbody = $('tbody-agend');
   if (!lista.length) {
     tbody.innerHTML = '<tr><td colspan="7"><div class="state-msg"><div class="icon">📭</div><div class="msg">Nenhum agendamento nesta data</div></div></td></tr>';
@@ -657,7 +945,7 @@ function renderAgendamentos(lista) {
       <tr>
         <td><strong>${horario}</strong></td>
         <td>${a.cliente_nome || '—'}${obs}</td>
-        <td>${fmtFone(a.numero_whatsapp)}</td>
+        <td>${fmtFone(a.telefone_paciente || a.numero_whatsapp)}</td>
         <td>${a.tipo_consulta || '—'}</td>
         <td>${a.tecnico_nome || '—'}${a.tecnico_nome_2 ? `<br><small style="color:var(--gray-400)">+ ${a.tecnico_nome_2}</small>` : ''}</td>
         <td>${origemBadge}</td>
@@ -665,6 +953,7 @@ function renderAgendamentos(lista) {
         <td>
           <div class="actions">
           ${pendente ? `<button class="btn btn-success btn-sm" onclick="atualizarStatus(${a.id},'confirmar')">✓ Confirmar</button>` : ''}
+          <button class="btn btn-primary btn-sm" onclick="abrirEdicaoAgendamento(${a.id})">✎ Editar</button>
           <button class="btn btn-danger btn-sm" onclick="removerDaLista(${removerArgs})">✕ Remover</button>
           </div>
         </td>

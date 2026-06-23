@@ -1,23 +1,13 @@
-# Cliente Redis
+# Biblioteca oficial do Redis para Python
 import redis
-# Variáveis de ambiente
+# Leitura das configurações de conexão via variáveis de ambiente
 import os
 
-# Conexão compartilhada
-# usada por toda aplicação
+# Conexão única compartilhada por toda a aplicação (padrão singleton).
+# decode_responses=True converte automaticamente bytes → string em todas as leituras,
+# evitando chamadas manuais a .decode() no restante do código.
 client = redis.Redis(
-    host=os.getenv(
-        "REDIS_HOST",
-        "localhost"
-    ),
-
-    port=int(
-        os.getenv(
-            "REDIS_PORT",
-            6379
-        )
-    ),
-
-    # Converte bytes → string
-    decode_responses=True
+    host=os.getenv("REDIS_HOST", "localhost"),
+    port=int(os.getenv("REDIS_PORT", 6379)),
+    decode_responses=True,
 )

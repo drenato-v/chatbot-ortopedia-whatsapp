@@ -1,33 +1,49 @@
+# Carrega variáveis de ambiente do arquivo .env antes de qualquer import
 import os
 from dotenv import load_dotenv
 load_dotenv(override=True)
 
+# Framework web assíncrono
 from fastapi import FastAPI
 from fastapi.responses import FileResponse, HTMLResponse
-from routes.webhook import router as webhook_router
-from routes.admin import router as admin_router
-from routes.painel import router as painel_router
-from routes.disponibilidade import router as disponibilidade_router
 
+# Roteadores de cada módulo da aplicação
+from routes.webhook import router as webhook_router          # Recebe mensagens do WhatsApp
+from routes.admin import router as admin_router              # Gerencia FAQ via API
+from routes.painel import router as painel_router            # Painel interno das atendentes
+from routes.disponibilidade import router as disponibilidade_router  # Configura agenda dos técnicos
+
+# Instância principal da aplicação FastAPI
 app = FastAPI(title="Chatbot Ortopedia", docs_url="/docs")
 
+# Registra os roteadores com seus prefixos e grupos de tags
 app.include_router(webhook_router)
 app.include_router(admin_router)
 app.include_router(painel_router)
 app.include_router(disponibilidade_router)
 
+# Diretório base para localizar arquivos estáticos
 _BASE = os.path.dirname(__file__)
+
 
 @app.get("/", include_in_schema=False)
 def home():
+    """Endpoint de health check — confirma que o servidor está rodando."""
     return {"status": "Servidor rodando"}
+
 
 @app.get("/painel", include_in_schema=False)
 def painel_ui():
+    """Serve o painel HTML das atendentes. Acesso apenas pela rede local da clínica."""
     return FileResponse(os.path.join(_BASE, "static", "painel.HTML"))
+
 
 @app.get("/privacidade", include_in_schema=False)
 def privacidade():
+    """
+    Página de política de privacidade exigida pela Meta para aprovação do app
+    no WhatsApp Business API. URL deve ser informada no painel da Meta.
+    """
     return HTMLResponse(content="""
 <!DOCTYPE html>
 <html lang="pt-BR">
@@ -73,4 +89,3 @@ def privacidade():
 </body>
 </html>
 """)
-
