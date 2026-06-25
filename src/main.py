@@ -8,19 +8,25 @@ from fastapi import FastAPI
 from fastapi.responses import FileResponse, HTMLResponse
 
 # Roteadores de cada módulo da aplicação
-from routes.webhook import router as webhook_router          # Recebe mensagens do WhatsApp
-from routes.admin import router as admin_router              # Gerencia FAQ via API
-from routes.painel import router as painel_router            # Painel interno das atendentes
+from routes.webhook import router as webhook_router                  # Recebe mensagens do WhatsApp
+from routes.admin import router as admin_router                      # Gerencia FAQ via API
+from routes.painel import router as painel_router                    # Painel interno das atendentes
 from routes.disponibilidade import router as disponibilidade_router  # Configura agenda dos técnicos
+from routes.auth import router as auth_router                        # Login / logout / sessão
+from routes.pacientes import router as pacientes_router              # Pacientes e fichas
+from routes.estoque  import router as estoque_router                 # Gestão de estoque
 
 # Instância principal da aplicação FastAPI
 app = FastAPI(title="Chatbot Ortopedia", docs_url="/docs")
 
 # Registra os roteadores com seus prefixos e grupos de tags
+app.include_router(auth_router)
+app.include_router(pacientes_router)
 app.include_router(webhook_router)
 app.include_router(admin_router)
 app.include_router(painel_router)
 app.include_router(disponibilidade_router)
+app.include_router(estoque_router)
 
 # Diretório base para localizar arquivos estáticos
 _BASE = os.path.dirname(__file__)
@@ -32,9 +38,18 @@ def home():
     return {"status": "Servidor rodando"}
 
 
+@app.get("/login", include_in_schema=False)
+def login_ui():
+    """Serve a página de login do sistema interno."""
+    return FileResponse(os.path.join(_BASE, "static", "login.html"))
+
+
 @app.get("/painel", include_in_schema=False)
 def painel_ui():
-    """Serve o painel HTML das atendentes. Acesso apenas pela rede local da clínica."""
+    """
+    Serve o painel HTML. A verificação de autenticação é feita pelo JavaScript
+    via /auth/me — se não autenticado, o frontend redireciona para /login.
+    """
     return FileResponse(os.path.join(_BASE, "static", "painel.HTML"))
 
 

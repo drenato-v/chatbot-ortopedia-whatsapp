@@ -15,7 +15,7 @@ from services.session_service import (
 from services.tecnico_service import (
     buscar_tecnico_cliente, buscar_tecnicos_disponiveis,
     buscar_horarios_disponiveis, atribuir_tecnico_cliente,
-    marcar_hora_como_ocupada,
+    marcar_hora_como_ocupada, liberar_hora,
 )
 
 # Envio de mensagens ao cliente via WhatsApp Business API
@@ -27,6 +27,12 @@ from db.mysql import (
     criar_agendamento_em_progresso, atualizar_agendamento,
     buscar_agendamento_em_progresso, buscar_agendamento_por_id,
     buscar_servicos_cliente, atualizar_nome_cliente,
+    buscar_agendamento_ativo_por_cliente,
+    verificar_paciente_por_nome_telefone,
+    buscar_agendamento_por_cliente_e_data,
+    verificar_presenca_paciente,
+    verificar_cpf_paciente,
+    criar_notificacao,
 )
 from datetime import datetime
 import re
@@ -101,6 +107,28 @@ _ESTADOS_EM_FLUXO = {
     EstadosConversa.AGUARDANDO_DATA,
     EstadosConversa.AGUARDANDO_HORARIO,
     EstadosConversa.AGUARDANDO_TIPO,
+    EstadosConversa.REAGENDAMENTO_NOME,
+    EstadosConversa.REAGENDAMENTO_TELEFONE,
+    EstadosConversa.REAGENDAMENTO_DATA_ANTIGA,
+    EstadosConversa.CANCELAMENTO_NOME,
+    EstadosConversa.CANCELAMENTO_TELEFONE,
+    EstadosConversa.CANCELAMENTO_CPF,
+    EstadosConversa.CANCELAMENTO_DATA,
+}
+
+# Estados do fluxo de reagendamento — impedem re-disparo da intercepção.
+_ESTADOS_REAGENDAMENTO = {
+    EstadosConversa.REAGENDAMENTO_NOME,
+    EstadosConversa.REAGENDAMENTO_TELEFONE,
+    EstadosConversa.REAGENDAMENTO_DATA_ANTIGA,
+}
+
+# Estados do fluxo de cancelamento — impedem re-disparo da intercepção.
+_ESTADOS_CANCELAMENTO = {
+    EstadosConversa.CANCELAMENTO_NOME,
+    EstadosConversa.CANCELAMENTO_TELEFONE,
+    EstadosConversa.CANCELAMENTO_CPF,
+    EstadosConversa.CANCELAMENTO_DATA,
 }
 
 
@@ -274,10 +302,84 @@ async def webhook(request: Request):
         # Garante que mensagens críticas de fluxo sejam exatas e previsíveis.
         resposta_direta = None
 
-        # ── 3. Follow-up pós-registro ─────────────────────────────────────────
+        # ── 3. Intercepção de reagendamento ──────────────────────────────────
+        _PALAVRAS_REAGENDAMENTO = [
+            "reagendar", "remarcar", "mudar horário", "mudar data",
+            "trocar horário", "não posso comparecer", "nova data",
+            "novo horário", "preciso mudar", "quero mudar",
+        ]
+
+        # Palavras que encerram o fluxo de reagendamento (inclui "cancelar" = desistir de reagendar)
+        _PALAVRAS_SAIR = ["deixa", "desistir", "cancelar", "sair", "esquecer",
+                          "não quero", "nao quero", "para", "chega"]
+        # Palavras que encerram o fluxo de cancelamento (sem "cancelar" para não conflitar)
+        _PALAVRAS_SAIR_CANCELAMENTO = ["deixa", "desistir", "sair", "esquecer",
+                                       "não quero", "nao quero", "para", "chega"]
+
+        # Saída do fluxo de reagendamento — detecta quando o cliente desiste
+        if (estado_atual in _ESTADOS_REAGENDAMENTO
+                and any(w in texto_cliente.lower() for w in _PALAVRAS_SAIR)):
+            historico         = []
+            dados_agendamento = {}
+            sessao.pop("agendamento_id", None)
+            resposta_direta = "Tudo bem! Se precisar reagendar ou tiver qualquer dúvida, é só chamar."
+            novo_estado = EstadosConversa.CONVERSA_LIVRE
+
+        # Saída do fluxo de cancelamento — detecta quando o cliente desiste
+        if (resposta_direta is None
+                and estado_atual in _ESTADOS_CANCELAMENTO
+                and any(w in texto_cliente.lower() for w in _PALAVRAS_SAIR_CANCELAMENTO)):
+            historico         = []
+            dados_agendamento = {}
+            resposta_direta   = "Tudo bem! Se precisar cancelar ou tiver qualquer dúvida, é só chamar."
+            novo_estado       = EstadosConversa.CONVERSA_LIVRE
+
+        # Inicia fluxo de reagendamento — interrompe qualquer estado exceto
+        # os próprios estados de reagendamento (evita loop infinito)
+        if (resposta_direta is None
+                and estado_atual not in _ESTADOS_REAGENDAMENTO
+                and any(w in texto_cliente.lower() for w in _PALAVRAS_REAGENDAMENTO)):
+            # Limpa estado anterior para evitar contaminação de sessões antigas
+            historico         = []
+            dados_agendamento = {}
+            sessao.pop("agendamento_id", None)
+            resposta_direta = (
+                "Para reagendar, preciso verificar seus dados.\n\n"
+                "Qual é o nome *completo* do paciente? (nome e sobrenome)"
+            )
+            novo_estado = EstadosConversa.REAGENDAMENTO_NOME
+
+        # Palavras que iniciam o fluxo de cancelamento pelo bot
+        _PALAVRAS_CANCELAMENTO = [
+            "cancelar", "cancela", "quero cancelar", "desmarcar", "desmarca",
+            "não vou comparecer", "nao vou comparecer",
+            "não posso ir", "nao posso ir",
+            "não vou conseguir", "nao vou conseguir",
+            "não vou poder", "nao vou poder",
+            "não consigo ir", "nao consigo ir",
+            "não poderei", "nao poderei",
+            "cancelamento",
+        ]
+
+        # Inicia fluxo de cancelamento — não dispara dentro do próprio fluxo
+        # nem dentro do fluxo de reagendamento
+        if (resposta_direta is None
+                and estado_atual not in _ESTADOS_CANCELAMENTO
+                and estado_atual not in _ESTADOS_REAGENDAMENTO
+                and any(w in texto_cliente.lower() for w in _PALAVRAS_CANCELAMENTO)):
+            historico         = []
+            dados_agendamento = {}
+            sessao.pop("agendamento_id", None)
+            resposta_direta = (
+                "Para cancelar, preciso verificar seus dados.\n\n"
+                "Qual é o nome *completo* do paciente? (nome e sobrenome)"
+            )
+            novo_estado = EstadosConversa.CANCELAMENTO_NOME
+
+        # ── 4. Follow-up pós-registro ─────────────────────────────────────────
         # Quando o paciente responde após ter um agendamento registrado,
         # consulta o banco para saber o status real antes de responder.
-        if estado_atual == EstadosConversa.AGENDAMENTO_CONFIRMADO:
+        if resposta_direta is None and estado_atual == EstadosConversa.AGENDAMENTO_CONFIRMADO:
             ag_id = sessao.get("agendamento_id")
             ag    = buscar_agendamento_por_id(ag_id) if ag_id else None
 
@@ -351,16 +453,23 @@ async def webhook(request: Request):
                 )
 
         elif novo_estado == EstadosConversa.AGUARDANDO_NOME:
-            # A mensagem inteira é tratada como o nome do paciente
             nome_paciente = texto_cliente.strip()
-            dados_agendamento["nome_paciente"] = nome_paciente
-            # Atualiza nome no cadastro do cliente somente se ainda estiver em branco
-            atualizar_nome_cliente(cliente_id, nome_paciente)
-            contexto_extra = (
-                f"Nome do paciente registrado: {nome_paciente}. "
-                "Agora pergunte o número de celular do paciente para contato."
-            )
-            novo_estado = EstadosConversa.AGUARDANDO_TELEFONE
+            palavras_nome = [p for p in re.split(r'[\s\-]+', nome_paciente) if len(p) > 1]
+            if len(palavras_nome) < 2:
+                # Exige nome completo — apenas primeiro nome não é aceito
+                resposta_direta = (
+                    "Por favor, informe o nome *completo* do paciente "
+                    "(nome e sobrenome). Não aceitamos apenas o primeiro nome."
+                )
+                novo_estado = EstadosConversa.AGUARDANDO_NOME
+            else:
+                dados_agendamento["nome_paciente"] = nome_paciente
+                atualizar_nome_cliente(cliente_id, nome_paciente)
+                contexto_extra = (
+                    f"Nome do paciente registrado: {nome_paciente}. "
+                    "Agora pergunte o número de celular do paciente para contato."
+                )
+                novo_estado = EstadosConversa.AGUARDANDO_TELEFONE
 
         elif novo_estado == EstadosConversa.AGUARDANDO_TELEFONE:
             # Remove caracteres inválidos mantendo dígitos, +, parênteses, hífen e espaço
@@ -386,32 +495,55 @@ async def webhook(request: Request):
             # Usuário acabou de fornecer a data — extrai e busca horários disponíveis
             data_str, data_obj = extrair_data(texto_cliente)
             if data_str and data_obj:
-                dados_agendamento["data"] = data_str
-                data_mysql = data_obj.strftime("%Y-%m-%d")
-                if agendamento_id:
-                    # Persiste a data imediatamente para não perder em caso de falha posterior
-                    atualizar_agendamento(agendamento_id, data_agendamento=data_obj)
-                setor = dados_agendamento.get("setor")
-                if setor:
-                    # Busca apenas o dia solicitado (dias=1) para não sobrecarregar a resposta
-                    slots_dia   = buscar_horarios_disponiveis(setor, data_mysql, dias=1)
-                    disponiveis = [
-                        s["hora"] for dia in slots_dia.values()
-                        for s in dia if s["disponivel"]
-                    ]
-                    if disponiveis:
-                        contexto_extra = (
-                            f"Horários disponíveis em {data_str}: {', '.join(disponiveis)}. "
-                            "Liste esses horários AGORA e peça ao cliente para escolher um. "
-                            "NÃO diga que vai verificar. NÃO invente [SISTEMA]."
-                        )
-                    else:
-                        # Sem técnico disponível nessa data → volta para pedir nova data
-                        contexto_extra = (
-                            f"Não há horários disponíveis em {data_str}. "
-                            "Informe ao cliente e peça outra data."
-                        )
-                        novo_estado = EstadosConversa.AGUARDANDO_DATA
+                agora = datetime.now()
+                hoje  = agora.replace(hour=0, minute=0, second=0, microsecond=0)
+
+                if data_obj < hoje:
+                    # Data anterior a hoje — rejeita diretamente sem acionar o Claude
+                    resposta_direta = (
+                        "Essa data já passou! Por favor, informe uma data a partir de hoje."
+                    )
+                    novo_estado = EstadosConversa.AGUARDANDO_DATA
+                elif data_obj.weekday() in (5, 6):
+                    # Sábado (5) ou domingo (6) — sem atendimento
+                    resposta_direta = (
+                        "Não realizamos atendimentos aos sábados e domingos. "
+                        "Por favor, informe uma data de segunda a sexta."
+                    )
+                    novo_estado = EstadosConversa.AGUARDANDO_DATA
+                else:
+                    dados_agendamento["data"] = data_str
+                    data_mysql = data_obj.strftime("%Y-%m-%d")
+                    if agendamento_id:
+                        # Persiste a data imediatamente para não perder em caso de falha posterior
+                        atualizar_agendamento(agendamento_id, data_agendamento=data_obj)
+                    setor = dados_agendamento.get("setor")
+                    if setor:
+                        # Busca apenas o dia solicitado (dias=1) para não sobrecarregar a resposta
+                        slots_dia   = buscar_horarios_disponiveis(setor, data_mysql, dias=1)
+                        disponiveis = [
+                            s["hora"] for dia in slots_dia.values()
+                            for s in dia if s["disponivel"]
+                        ]
+                        # Para hoje, remove os horários que já passaram
+                        if data_obj.date() == agora.date():
+                            disponiveis = [
+                                h for h in disponiveis
+                                if int(h.split(":")[0]) > agora.hour
+                            ]
+                        if disponiveis:
+                            contexto_extra = (
+                                f"Horários disponíveis em {data_str}: {', '.join(disponiveis)}. "
+                                "Liste esses horários AGORA e peça ao cliente para escolher um. "
+                                "NÃO diga que vai verificar. NÃO invente [SISTEMA]."
+                            )
+                        else:
+                            # Sem horários disponíveis nessa data → volta para pedir nova data
+                            contexto_extra = (
+                                f"Não há horários disponíveis em {data_str}. "
+                                "Informe ao cliente e peça outra data."
+                            )
+                            novo_estado = EstadosConversa.AGUARDANDO_DATA
             else:
                 contexto_extra = "Data não reconhecida. Peça ao cliente para informar no formato DD/MM/AAAA."
                 novo_estado    = EstadosConversa.AGUARDANDO_DATA
@@ -433,6 +565,20 @@ async def webhook(request: Request):
                     horario_str = ""
 
             if hora_int is not None:
+                # Rejeita horário que já passou para agendamentos no dia atual
+                data_str_salva = dados_agendamento.get("data")
+                if data_str_salva:
+                    data_agendada = datetime.strptime(data_str_salva, "%d/%m/%Y")
+                    if data_agendada.date() == datetime.now().date() and hora_int <= datetime.now().hour:
+                        proxima = datetime.now().hour + 1
+                        resposta_direta = (
+                            f"Esse horário já passou. Informe um horário disponível "
+                            f"a partir das {proxima:02d}:00."
+                        )
+                        novo_estado = EstadosConversa.AGUARDANDO_HORARIO
+                        hora_int = None  # descarta o horário inválido
+
+            if hora_int is not None:
                 dados_agendamento["horario"]  = horario_str
                 dados_agendamento["hora_int"] = hora_int
                 if agendamento_id:
@@ -442,12 +588,211 @@ async def webhook(request: Request):
             if setor_detectado and not dados_agendamento.get("setor"):
                 dados_agendamento["setor"] = setor_detectado
 
-            if dados_agendamento.get("setor"):
-                novo_estado = EstadosConversa.AGENDAMENTO_CONFIRMADO
+            if resposta_direta is None:
+                if dados_agendamento.get("setor"):
+                    novo_estado = EstadosConversa.AGENDAMENTO_CONFIRMADO
+                else:
+                    # Setor ainda desconhecido → pede ao cliente
+                    lista = ", ".join(SETORES)
+                    contexto_extra = f"Pergunte qual o tipo de serviço. Opções: {lista}"
+
+        # ── Handlers do fluxo de reagendamento ───────────────────────────────
+        # Bloco separado (if, não elif) com guarda resposta_direta is None
+        # para não rodar quando a intercepção de reagendamento já setou a resposta.
+
+        if resposta_direta is None and novo_estado == EstadosConversa.REAGENDAMENTO_NOME:
+            nome = texto_cliente.strip()
+            palavras = [p for p in re.split(r'[\s\-]+', nome) if len(p) > 1]
+            if len(palavras) < 2:
+                resposta_direta = (
+                    "Preciso do nome *completo* (nome e sobrenome). "
+                    "Por favor, informe novamente."
+                )
+                novo_estado = EstadosConversa.REAGENDAMENTO_NOME
             else:
-                # Setor ainda desconhecido → pede ao cliente
-                lista = ", ".join(SETORES)
-                contexto_extra = f"Pergunte qual o tipo de serviço. Opções: {lista}"
+                dados_agendamento["reagendamento_nome"] = nome
+                resposta_direta = (
+                    f"Obrigado, {nome.split()[0]}!\n\n"
+                    "Agora informe o número de celular cadastrado."
+                )
+                novo_estado = EstadosConversa.REAGENDAMENTO_TELEFONE
+
+        elif resposta_direta is None and novo_estado == EstadosConversa.REAGENDAMENTO_TELEFONE:
+            tel    = texto_cliente.strip()
+            digits = re.sub(r'\D', '', tel)
+            if len(digits) < 6:
+                # Texto sem dígitos suficientes — provavelmente digitou nome por engano
+                resposta_direta = (
+                    "Isso não parece um número de celular. "
+                    "Por favor, informe apenas o número (ex: 17999999999)."
+                )
+                novo_estado = EstadosConversa.REAGENDAMENTO_TELEFONE
+            else:
+                nome = dados_agendamento.get("reagendamento_nome", "")
+                if verificar_paciente_por_nome_telefone(nome, tel):
+                    dados_agendamento["reagendamento_tel"] = tel
+                    resposta_direta = (
+                        "Dados verificados!\n\n"
+                        "Para qual *data* está marcado o agendamento que deseja reagendar? "
+                        "(ex: 30/06/2026)"
+                    )
+                    novo_estado = EstadosConversa.REAGENDAMENTO_DATA_ANTIGA
+                else:
+                    resposta_direta = (
+                        "Nome ou número não encontrado em nosso sistema. "
+                        "Verifique os dados e informe novamente o número de celular."
+                    )
+                    novo_estado = EstadosConversa.REAGENDAMENTO_TELEFONE
+
+        elif resposta_direta is None and novo_estado == EstadosConversa.REAGENDAMENTO_DATA_ANTIGA:
+            data_antiga_str, _ = extrair_data(texto_cliente)
+            if not data_antiga_str:
+                resposta_direta = (
+                    "Data não reconhecida. Informe no formato DD/MM/AAAA (ex: 30/06/2026)."
+                )
+                novo_estado = EstadosConversa.REAGENDAMENTO_DATA_ANTIGA
+            else:
+                ag_antigo = buscar_agendamento_por_cliente_e_data(cliente_id, data_antiga_str)
+                if not ag_antigo:
+                    resposta_direta = (
+                        f"Não encontrei agendamento ativo para o dia {data_antiga_str}. "
+                        "Verifique a data e informe novamente."
+                    )
+                    novo_estado = EstadosConversa.REAGENDAMENTO_DATA_ANTIGA
+                else:
+                    # Cancela agendamento antigo e libera slots
+                    atualizar_agendamento(ag_antigo["id"], status="cancelado")
+                    if ag_antigo.get("tecnico_id") and ag_antigo.get("data_agendamento") and ag_antigo.get("horario"):
+                        data_lib = ag_antigo["data_agendamento"].strftime("%Y-%m-%d")
+                        hora_lib = int(ag_antigo["horario"].split(":")[0])
+                        liberar_hora(ag_antigo["tecnico_id"], data_lib, hora_lib)
+                        if ag_antigo.get("tecnico_id_2"):
+                            liberar_hora(ag_antigo["tecnico_id_2"], data_lib, hora_lib)
+                    # Pré-preenche dados do agendamento antigo para o novo fluxo,
+                    # preservando telefone original para não usar o número do WhatsApp.
+                    servico_fmt = ag_antigo.get("tipo_consulta") or "o serviço"
+                    nome_reag   = dados_agendamento.get("reagendamento_nome") or ag_antigo.get("nome_paciente")
+                    tel_reag    = dados_agendamento.get("reagendamento_tel") or ag_antigo.get("telefone_paciente")
+                    dados_agendamento = {
+                        "setor":             ag_antigo.get("tipo_consulta"),
+                        "nome_paciente":     nome_reag,
+                        "telefone_paciente": tel_reag,
+                    }
+                    novo_ag_id = criar_agendamento_em_progresso(cliente_id)
+                    sessao["agendamento_id"] = novo_ag_id
+                    resposta_direta = (
+                        f"Agendamento de {servico_fmt} do dia {data_antiga_str} cancelado!\n\n"
+                        "Para qual nova data você gostaria de reagendar? (ex: 05/07/2026)"
+                    )
+                    novo_estado = EstadosConversa.AGUARDANDO_DATA
+
+        # ── Handlers do fluxo de cancelamento ────────────────────────────────
+        # Bloco independente com guarda resposta_direta is None.
+
+        if resposta_direta is None and novo_estado == EstadosConversa.CANCELAMENTO_NOME:
+            nome = texto_cliente.strip()
+            palavras = [p for p in re.split(r'[\s\-]+', nome) if len(p) > 1]
+            if len(palavras) < 2:
+                resposta_direta = (
+                    "Preciso do nome *completo* (nome e sobrenome). "
+                    "Por favor, informe novamente."
+                )
+                novo_estado = EstadosConversa.CANCELAMENTO_NOME
+            else:
+                dados_agendamento["cancelamento_nome"] = nome
+                resposta_direta = (
+                    f"Obrigado, {nome.split()[0]}!\n\n"
+                    "Agora informe o número de celular cadastrado."
+                )
+                novo_estado = EstadosConversa.CANCELAMENTO_TELEFONE
+
+        elif resposta_direta is None and novo_estado == EstadosConversa.CANCELAMENTO_TELEFONE:
+            tel    = texto_cliente.strip()
+            digits = re.sub(r'\D', '', tel)
+            if len(digits) < 6:
+                resposta_direta = (
+                    "Isso não parece um número de celular. "
+                    "Por favor, informe apenas o número (ex: 17999999999)."
+                )
+                novo_estado = EstadosConversa.CANCELAMENTO_TELEFONE
+            else:
+                nome = dados_agendamento.get("cancelamento_nome", "")
+                if verificar_paciente_por_nome_telefone(nome, tel):
+                    dados_agendamento["cancelamento_tel"] = tel
+                    # Verifica se o paciente tem registro presencial (tem CPF no banco)
+                    pac_presencial = verificar_presenca_paciente(nome, tel)
+                    if pac_presencial and pac_presencial.get("cpf"):
+                        resposta_direta = (
+                            "Dados verificados!\n\n"
+                            "Como você já foi atendido presencialmente, precisamos do seu *CPF* "
+                            "para confirmar o cancelamento."
+                        )
+                        novo_estado = EstadosConversa.CANCELAMENTO_CPF
+                    else:
+                        resposta_direta = (
+                            "Dados verificados!\n\n"
+                            "Para qual *data* está marcado o agendamento que deseja cancelar? "
+                            "(ex: 30/06/2026)"
+                        )
+                        novo_estado = EstadosConversa.CANCELAMENTO_DATA
+                else:
+                    resposta_direta = (
+                        "Nome ou número não encontrado em nosso sistema. "
+                        "Verifique os dados e informe novamente o número de celular."
+                    )
+                    novo_estado = EstadosConversa.CANCELAMENTO_TELEFONE
+
+        elif resposta_direta is None and novo_estado == EstadosConversa.CANCELAMENTO_CPF:
+            nome = dados_agendamento.get("cancelamento_nome", "")
+            if verificar_cpf_paciente(nome, texto_cliente.strip()):
+                resposta_direta = (
+                    "CPF confirmado!\n\n"
+                    "Para qual *data* está marcado o agendamento que deseja cancelar? "
+                    "(ex: 30/06/2026)"
+                )
+                novo_estado = EstadosConversa.CANCELAMENTO_DATA
+            else:
+                resposta_direta = (
+                    "CPF não encontrado. Verifique e informe novamente."
+                )
+                novo_estado = EstadosConversa.CANCELAMENTO_CPF
+
+        elif resposta_direta is None and novo_estado == EstadosConversa.CANCELAMENTO_DATA:
+            data_str, _ = extrair_data(texto_cliente)
+            if not data_str:
+                resposta_direta = (
+                    "Data não reconhecida. Informe no formato DD/MM/AAAA (ex: 30/06/2026)."
+                )
+                novo_estado = EstadosConversa.CANCELAMENTO_DATA
+            else:
+                ag = buscar_agendamento_por_cliente_e_data(cliente_id, data_str)
+                if not ag:
+                    resposta_direta = (
+                        f"Não encontrei agendamento ativo para o dia {data_str}. "
+                        "Verifique a data e informe novamente."
+                    )
+                    novo_estado = EstadosConversa.CANCELAMENTO_DATA
+                else:
+                    atualizar_agendamento(ag["id"], status="cancelado")
+                    if ag.get("tecnico_id") and ag.get("data_agendamento") and ag.get("horario"):
+                        data_lib = ag["data_agendamento"].strftime("%Y-%m-%d")
+                        hora_lib = int(ag["horario"].split(":")[0])
+                        liberar_hora(ag["tecnico_id"], data_lib, hora_lib)
+                        if ag.get("tecnico_id_2"):
+                            liberar_hora(ag["tecnico_id_2"], data_lib, hora_lib)
+                    servico_fmt  = ag.get("tipo_consulta") or "o serviço"
+                    nome_pac     = dados_agendamento.get("cancelamento_nome") or ag.get("nome_paciente") or "Paciente"
+                    horario_fmt  = ag.get("horario", "")
+                    criar_notificacao(
+                        f"Cancelamento via WhatsApp: {nome_pac} cancelou {servico_fmt} "
+                        f"do dia {data_str}" + (f" às {horario_fmt}" if horario_fmt else "") + "."
+                    )
+                    dados_agendamento = {}
+                    resposta_direta = (
+                        f"Agendamento de *{servico_fmt}* do dia *{data_str}* cancelado com sucesso!\n\n"
+                        "Se precisar reagendar ou tiver qualquer dúvida, é só chamar."
+                    )
+                    novo_estado = EstadosConversa.CONVERSA_LIVRE
 
         # ── Finalização: bloco separado (não elif) ────────────────────────────
         # Pode ser alcançado diretamente do bloco AGUARDANDO_TIPO acima

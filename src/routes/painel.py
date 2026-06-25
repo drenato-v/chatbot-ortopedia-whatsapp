@@ -1,18 +1,29 @@
 # Ferramentas de roteamento e modelos de dados do FastAPI/Pydantic
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from typing import Optional
 from datetime import datetime
+
+from services.auth_service import get_current_user, require_roles
 
 # Funções de banco de dados para técnicos e agendamentos
 from db.mysql import (
     listar_tecnicos,
     buscar_agendamentos_por_data,
     buscar_agendamentos_pendentes,
+    buscar_agendamentos_por_nome,
     atualizar_status_agendamento,
     criar_agendamento_manual,
     atualizar_agendamento,
     buscar_agendamento_por_id,
+    buscar_paciente_por_cliente_id,
+    criar_paciente,
+    criar_ficha,
+    buscar_ficha_por_agendamento,
+    adicionar_historico,
+    buscar_notificacoes,
+    marcar_notificacao_lida,
+    marcar_todas_notificacoes_lidas,
 )
 
 # Serviços de agenda: visualização, bloqueio e liberação de slots
@@ -81,30 +92,34 @@ class ConfirmarBody(BaseModel):
 
 # ── Endpoints de técnicos ─────────────────────────────────────────────────────
 
+# Dependência reutilizável para rotas que exigem atendente ou admin
+_atendente = Depends(require_roles("atendente"))
+
+
 @router.get("/api/tecnicos")
-async def api_listar_tecnicos():
-    """Lista todos os técnicos ativos, ordenados por setor e nome."""
+async def api_listar_tecnicos(_=Depends(get_current_user)):
+    """Lista todos os técnicos ativos. Qualquer usuário autenticado pode consultar."""
     return {"tecnicos": listar_tecnicos()}
 
 
 # ── Endpoints de disponibilidade ──────────────────────────────────────────────
 
 @router.get("/api/disponibilidade")
-async def api_buscar_disponibilidade(tecnico_id: int, data: str):
-    """Retorna a agenda completa de um técnico para uma data (slot a slot)."""
+async def api_buscar_disponibilidade(tecnico_id: int, data: str, _=Depends(get_current_user)):
+    """Retorna a agenda completa de um técnico para uma data. Leitura para todos os perfis."""
     return {"agenda": buscar_agenda_dia(tecnico_id, data)}
 
 
 @router.post("/api/disponibilidade/toggle")
-async def api_toggle_disponibilidade(body: ToggleHoraBody):
-    """Alterna um slot entre disponível e bloqueado. Retorna o novo estado."""
+async def api_toggle_disponibilidade(body: ToggleHoraBody, _=_atendente):
+    """Alterna um slot entre disponível e bloqueado. Apenas admin e atendente."""
     novo_estado = toggle_disponibilidade(body.tecnico_id, body.data, body.hora)
     return {"disponivel": novo_estado}
 
 
 @router.post("/api/disponibilidade/liberar")
-async def api_liberar_hora(body: ToggleHoraBody):
-    """Força a liberação de um slot bloqueado (usado ao cancelar ou recusar agendamentos)."""
+async def api_liberar_hora(body: ToggleHoraBody, _=_atendente):
+    """Força a liberação de um slot bloqueado. Apenas admin e atendente."""
     liberar_hora(body.tecnico_id, body.data, body.hora)
     return {"disponivel": True}
 
@@ -112,19 +127,27 @@ async def api_liberar_hora(body: ToggleHoraBody):
 # ── Endpoints de agendamentos ─────────────────────────────────────────────────
 
 @router.get("/api/agendamentos")
-async def api_listar_agendamentos(data: str):
-    """Lista agendamentos confirmados/pendentes de uma data específica (aba Agendamentos)."""
-    return {"agendamentos": buscar_agendamentos_por_data(data)}
+async def api_listar_agendamentos(data: str, tecnico_id: int = None, _=Depends(get_current_user)):
+    """Lista agendamentos de uma data. Filtro opcional por técnico."""
+    return {"agendamentos": buscar_agendamentos_por_data(data, tecnico_id=tecnico_id)}
 
 
 @router.get("/api/agendamentos/pendentes")
-async def api_listar_agendamentos_pendentes():
-    """Lista todos os agendamentos aguardando aprovação (aba Pendentes)."""
+async def api_listar_agendamentos_pendentes(_=_atendente):
+    """Lista solicitações pendentes. Apenas admin e atendente podem gerenciar pendentes."""
     return {"agendamentos": buscar_agendamentos_pendentes()}
 
 
+@router.get("/api/agendamentos/busca")
+async def api_buscar_agendamentos_por_nome(q: str = "", _=Depends(get_current_user)):
+    """Busca agendamentos por nome do paciente, independente de data."""
+    if not q or len(q.strip()) < 1:
+        return {"agendamentos": []}
+    return {"agendamentos": buscar_agendamentos_por_nome(q.strip())}
+
+
 @router.post("/api/agendamentos/{agendamento_id}/confirmar")
-async def api_confirmar_agendamento(agendamento_id: int, body: ConfirmarBody = None):
+async def api_confirmar_agendamento(agendamento_id: int, body: ConfirmarBody = None, current_user: dict = _atendente):
     """
     Confirma um agendamento pendente e notifica o cliente via WhatsApp.
 
@@ -148,7 +171,9 @@ async def api_confirmar_agendamento(agendamento_id: int, body: ConfirmarBody = N
 
     atualizar_status_agendamento(agendamento_id, "confirmado")
 
-    # Envia confirmação ao paciente via WhatsApp
+    # Envia confirmação ao paciente via WhatsApp imediatamente após confirmar.
+    # Feito ANTES da criação de paciente/ficha para garantir que o cliente seja
+    # notificado mesmo se houver falha na criação do registro clínico.
     if ag and ag.get("numero_whatsapp"):
         data_fmt = ag["data_agendamento"].strftime("%d/%m/%Y") if ag.get("data_agendamento") else "—"
         horario  = ag.get("horario") or "—"
@@ -165,16 +190,50 @@ async def api_confirmar_agendamento(agendamento_id: int, body: ConfirmarBody = N
         )
         await enviar_mensagem(ag["numero_whatsapp"], msg)
 
+    # Auto-cria paciente e ficha após notificar.
+    # Envolvido em try/except para que uma falha aqui não impeça a notificação
+    # nem reverta a confirmação já registrada no banco.
+    if ag and ag.get("cliente_id"):
+        try:
+            pac = buscar_paciente_por_cliente_id(ag["cliente_id"])
+            if not pac:
+                paciente_id = criar_paciente(
+                    nome=ag.get("nome_paciente") or "Paciente",
+                    telefone=ag.get("numero_whatsapp"),
+                    cliente_id=ag["cliente_id"],
+                    atendido_por_id=current_user["id"],
+                    atendido_por_nome=current_user["nome"],
+                )
+            else:
+                paciente_id = pac["id"]
+
+            if not buscar_ficha_por_agendamento(agendamento_id):
+                ficha_id = criar_ficha(
+                    paciente_id=paciente_id,
+                    tipo_servico=ag.get("tipo_consulta") or "Outras",
+                    agendamento_id=agendamento_id,
+                )
+                adicionar_historico(
+                    ficha_id=ficha_id,
+                    etapa="Atendimento",
+                    usuario_id=current_user["id"],
+                    usuario_nome=current_user["nome"],
+                    descricao=f"Agendamento confirmado por {current_user['nome']}.",
+                )
+        except Exception as exc:
+            print(f"[WARN] confirmar {agendamento_id}: falha ao criar paciente/ficha — {exc}")
+
     return {"status": "confirmado"}
 
 
 @router.post("/api/agendamentos/{agendamento_id}/cancelar")
-async def api_cancelar_agendamento(agendamento_id: int):
+async def api_cancelar_agendamento(agendamento_id: int, _=_atendente):
     """
     Cancela (recusa) um agendamento e libera os slots dos técnicos envolvidos.
     Notifica o cliente sobre a recusa via WhatsApp.
     """
     ag = buscar_agendamento_por_id(agendamento_id)
+    status_anterior = ag.get("status") if ag else None
     atualizar_status_agendamento(agendamento_id, "cancelado")
 
     # Libera os slots bloqueados pelos técnicos principal e secundário
@@ -186,21 +245,52 @@ async def api_cancelar_agendamento(agendamento_id: int):
         if ag.get("tecnico_id_2"):
             liberar_hora(ag["tecnico_id_2"], data, hora)
 
-    # Notifica o paciente sobre a recusa
+    # Mensagem diferenciada: pendente = solicitação recusada; confirmado = cancelamento
     if ag and ag.get("numero_whatsapp"):
         paciente = ag.get("nome_paciente") or "paciente"
-        msg = (
-            f"Olá, {paciente}. Infelizmente não foi possível confirmar sua solicitação "
-            f"de agendamento na Ortopedia Geral.\n\n"
-            f"Para reagendar ou mais informações: (17) 99793-1926"
-        )
+        if status_anterior == "confirmado":
+            msg = (
+                f"Olá, {paciente}. Seu agendamento na Ortopedia Geral foi cancelado.\n\n"
+                f"Para reagendar ou mais informações: (17) 99793-1926"
+            )
+        else:
+            msg = (
+                f"Olá, {paciente}. Infelizmente não foi possível confirmar sua solicitação "
+                f"de agendamento na Ortopedia Geral.\n\n"
+                f"Para reagendar ou mais informações: (17) 99793-1926"
+            )
         await enviar_mensagem(ag["numero_whatsapp"], msg)
 
     return {"status": "cancelado"}
 
 
+@router.get("/api/notificacoes")
+async def api_listar_notificacoes(nao_lidas: bool = False, _=Depends(get_current_user)):
+    """Retorna notificações do painel. Filtra apenas não lidas se nao_lidas=true."""
+    items = buscar_notificacoes(apenas_nao_lidas=nao_lidas)
+    # Serializa datetimes para ISO string
+    for n in items:
+        if hasattr(n.get("created_at"), "isoformat"):
+            n["created_at"] = n["created_at"].isoformat()
+    return {"notificacoes": items, "total_nao_lidas": sum(1 for n in items if not n["lida"])}
+
+
+@router.post("/api/notificacoes/{notificacao_id}/lida")
+async def api_marcar_lida(notificacao_id: int, _=Depends(get_current_user)):
+    """Marca uma notificação específica como lida."""
+    marcar_notificacao_lida(notificacao_id)
+    return {"status": "ok"}
+
+
+@router.post("/api/notificacoes/todas-lidas")
+async def api_marcar_todas_lidas(_=Depends(get_current_user)):
+    """Marca todas as notificações como lidas."""
+    marcar_todas_notificacoes_lidas()
+    return {"status": "ok"}
+
+
 @router.post("/api/agendamentos/manual")
-async def api_criar_agendamento_manual(body: AgendamentoManualBody):
+async def api_criar_agendamento_manual(body: AgendamentoManualBody, _=_atendente):
     """
     Cria um agendamento diretamente pelo painel (sem passar pelo bot do WhatsApp).
     Usado pelas atendentes para registrar agendamentos feitos por telefone ou presencialmente.
@@ -227,7 +317,7 @@ async def api_criar_agendamento_manual(body: AgendamentoManualBody):
 
 
 @router.put("/api/agendamentos/{agendamento_id}")
-async def api_editar_agendamento(agendamento_id: int, body: AgendamentoEditBody):
+async def api_editar_agendamento(agendamento_id: int, body: AgendamentoEditBody, _=_atendente):
     """
     Edita campos de um agendamento existente.
 

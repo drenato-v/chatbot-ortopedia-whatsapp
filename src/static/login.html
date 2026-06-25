@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ortopedia Geral — Acesso</title>
+<style>
+:root {
+  --primary:      #1557a8;
+  --primary-dark: #0f4080;
+  --gray-100:     #f1f5f9;
+  --gray-200:     #e2e8f0;
+  --gray-600:     #475569;
+  --gray-800:     #1e293b;
+  --red:          #b91c1c;
+  --red-bg:       #fee2e2;
+  --radius:       8px;
+}
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  background: var(--gray-100);
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.card {
+  background: #fff;
+  border-radius: var(--radius);
+  box-shadow: 0 4px 24px rgba(0,0,0,.12);
+  padding: 40px 36px;
+  width: 360px;
+  max-width: 94vw;
+}
+/* Cabeçalho do card com ícone e título */
+.logo {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 30px;
+}
+.logo-icon {
+  width: 42px; height: 42px;
+  background: var(--primary);
+  border-radius: 10px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 1.3rem;
+  flex-shrink: 0;
+}
+.logo h1 {
+  font-size: 1.05rem;
+  font-weight: 600;
+  color: var(--gray-800);
+  line-height: 1.25;
+}
+.logo span {
+  font-size: .78rem;
+  color: var(--gray-600);
+  display: block;
+  margin-top: 1px;
+}
+.form-group {
+  display: flex; flex-direction: column; gap: 5px;
+  margin-bottom: 16px;
+}
+label {
+  font-size: .75rem; font-weight: 600;
+  color: var(--gray-600);
+  text-transform: uppercase; letter-spacing: .4px;
+}
+input {
+  padding: 10px 12px;
+  border: 1.5px solid var(--gray-200);
+  border-radius: var(--radius);
+  font-size: .95rem;
+  outline: none;
+  transition: border-color .15s;
+}
+input:focus { border-color: var(--primary); }
+.btn {
+  width: 100%; padding: 11px;
+  background: var(--primary); color: #fff;
+  border: none; border-radius: var(--radius);
+  font-size: .95rem; font-weight: 600;
+  cursor: pointer; margin-top: 8px;
+  transition: background .15s;
+}
+.btn:hover:not(:disabled) { background: var(--primary-dark); }
+.btn:disabled { opacity: .6; cursor: not-allowed; }
+/* Caixa de erro — oculta por padrão, exibida via .show */
+.erro {
+  display: none;
+  background: var(--red-bg); color: var(--red);
+  padding: 10px 12px; border-radius: var(--radius);
+  font-size: .85rem; margin-bottom: 16px;
+}
+.erro.show { display: block; }
+</style>
+</head>
+<body>
+
+<div class="card">
+  <div class="logo">
+    <div class="logo-icon">🏥</div>
+    <h1>Ortopedia Geral<span>Sistema Interno</span></h1>
+  </div>
+
+  <div id="msg-erro" class="erro">Credenciais inválidas. Tente novamente.</div>
+
+  <form id="form-login">
+    <div class="form-group">
+      <label for="email">E-mail</label>
+      <input id="email" type="email" placeholder="seu@email.com" required autofocus>
+    </div>
+    <div class="form-group">
+      <label for="senha">Senha</label>
+      <input id="senha" type="password" placeholder="••••••••" required>
+    </div>
+    <button class="btn" id="btn-login" type="submit">Entrar</button>
+  </form>
+</div>
+
+<script>
+document.getElementById('form-login').addEventListener('submit', async (e) => {
+  e.preventDefault();
+
+  const btn   = document.getElementById('btn-login');
+  const erro  = document.getElementById('msg-erro');
+  const email = document.getElementById('email').value.trim();
+  const senha = document.getElementById('senha').value;
+
+  // Feedback visual durante a requisição
+  btn.disabled    = true;
+  btn.textContent = 'Entrando...';
+  erro.classList.remove('show');
+
+  try {
+    const res = await fetch('/auth/login', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ email, senha }),
+    });
+
+    if (res.ok) {
+      // Cookie HttpOnly definido pelo servidor — redireciona para o painel
+      window.location.href = '/painel';
+    } else {
+      // 401 ou 403: exibe mensagem de erro sem revelar detalhes
+      const data = await res.json().catch(() => ({}));
+      erro.textContent = data.detail || 'Credenciais inválidas. Tente novamente.';
+      erro.classList.add('show');
+    }
+  } catch {
+    erro.textContent = 'Erro de conexão. Verifique sua rede e tente novamente.';
+    erro.classList.add('show');
+  } finally {
+    btn.disabled    = false;
+    btn.textContent = 'Entrar';
+  }
+});
+</script>
+
+</body>
+</html>

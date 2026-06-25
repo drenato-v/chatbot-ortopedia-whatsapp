@@ -76,6 +76,17 @@ class EstadosConversa:
     # Fluxo encerrado; IA responde normalmente
     CONVERSA_LIVRE = "conversa_livre"
 
+    # ── Fluxo de reagendamento ──────────────────────────────────────────────
+    REAGENDAMENTO_NOME        = "reagendamento_nome"
+    REAGENDAMENTO_TELEFONE    = "reagendamento_telefone"
+    REAGENDAMENTO_DATA_ANTIGA = "reagendamento_data_antiga"
+
+    # ── Fluxo de cancelamento ───────────────────────────────────────────────
+    CANCELAMENTO_NOME     = "cancelamento_nome"
+    CANCELAMENTO_TELEFONE = "cancelamento_telefone"
+    CANCELAMENTO_CPF      = "cancelamento_cpf"       # só para pacientes presenciais
+    CANCELAMENTO_DATA     = "cancelamento_data"
+
 
 def obter_sessao(numero_cliente: str) -> dict:
     """
