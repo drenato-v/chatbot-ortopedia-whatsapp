@@ -141,7 +141,10 @@ Se o cliente responder com um número (ex: "14" ou "14h"), isso é o horário es
     if estado == "aguardando_tipo":
         return prompt_base + f"""
 FLUXO: Data {dados_agendamento.get("data") if dados_agendamento else ""}, horário {dados_agendamento.get("horario") if dados_agendamento else ""}.
-Se o serviço ainda não foi informado, pergunte qual é. Caso já esteja no bloco [SISTEMA], confirme e avance.
+INSTRUÇÃO: Sua ÚNICA tarefa é perguntar qual serviço o paciente precisa, caso ainda não tenha sido informado.
+NUNCA diga que o agendamento foi confirmado, registrado ou finalizado.
+NUNCA use expressões como "tudo certo", "pronto", "agendado", "confirmado" ou similares.
+Apenas colete o tipo de serviço e aguarde o sistema avançar.
 """
 
     if estado == "agendamento_confirmado":

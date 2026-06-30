@@ -17,6 +17,7 @@ from db.mysql import (
     atualizar_agendamento,
     buscar_agendamento_por_id,
     buscar_paciente_por_cliente_id,
+    buscar_pacientes,
     criar_paciente,
     criar_ficha,
     buscar_ficha_por_agendamento,
@@ -54,13 +55,14 @@ class ToggleHoraBody(BaseModel):
 
 class AgendamentoManualBody(BaseModel):
     """Dados para criar um agendamento diretamente pelo painel (sem passar pelo bot)."""
-    tecnico_id:    int
-    data:          str
-    hora:          int
-    tipo_consulta: str
-    nome_paciente: str
-    observacoes:   Optional[str] = None
-    tecnico_id_2:  Optional[int] = None  # segundo técnico (atendimento compartilhado)
+    tecnico_id:        int
+    data:              str
+    hora:              int
+    tipo_consulta:     str
+    nome_paciente:     str
+    telefone_paciente: Optional[str] = None
+    observacoes:       Optional[str] = None
+    tecnico_id_2:      Optional[int] = None  # segundo técnico (atendimento compartilhado)
 
 
 class AgendamentoEditBody(BaseModel):
@@ -290,12 +292,12 @@ async def api_marcar_todas_lidas(_=Depends(get_current_user)):
 
 
 @router.post("/api/agendamentos/manual")
-async def api_criar_agendamento_manual(body: AgendamentoManualBody, _=_atendente):
+async def api_criar_agendamento_manual(body: AgendamentoManualBody, current_user: dict = _atendente):
     """
     Cria um agendamento diretamente pelo painel (sem passar pelo bot do WhatsApp).
     Usado pelas atendentes para registrar agendamentos feitos por telefone ou presencialmente.
     """
-    data_hora = datetime.strptime(f"{body.data} {body.hora:02d}:00", "%Y-%m-%d %H:%M")
+    data_hora   = datetime.strptime(f"{body.data} {body.hora:02d}:00", "%Y-%m-%d %H:%M")
     horario_str = f"{body.hora:02d}:00"
 
     agendamento_id = criar_agendamento_manual(
@@ -312,6 +314,40 @@ async def api_criar_agendamento_manual(body: AgendamentoManualBody, _=_atendente
     marcar_hora_como_ocupada(body.tecnico_id, body.data, body.hora)
     if body.tecnico_id_2:
         marcar_hora_como_ocupada(body.tecnico_id_2, body.data, body.hora)
+
+    # Cria o paciente se ainda não existir e abre a ficha vinculada ao agendamento
+    try:
+        nome_normalizado = body.nome_paciente.strip().lower()
+        existentes = buscar_pacientes(body.nome_paciente)
+        pac = next(
+            (p for p in existentes if p["nome"].strip().lower() == nome_normalizado),
+            None,
+        )
+        if not pac:
+            paciente_id = criar_paciente(
+                nome=body.nome_paciente,
+                telefone=body.telefone_paciente,
+                atendido_por_id=current_user["id"],
+                atendido_por_nome=current_user["nome"],
+            )
+        else:
+            paciente_id = pac["id"]
+
+        if not buscar_ficha_por_agendamento(agendamento_id):
+            ficha_id = criar_ficha(
+                paciente_id=paciente_id,
+                tipo_servico=body.tipo_consulta,
+                agendamento_id=agendamento_id,
+            )
+            adicionar_historico(
+                ficha_id=ficha_id,
+                etapa="Atendimento",
+                usuario_id=current_user["id"],
+                usuario_nome=current_user["nome"],
+                descricao=f"Agendamento manual criado por {current_user['nome']}.",
+            )
+    except Exception as exc:
+        print(f"[WARN] agendamento_manual {agendamento_id}: falha ao criar paciente/ficha — {exc}")
 
     return {"status": "ok", "agendamento_id": agendamento_id}
 

@@ -33,6 +33,7 @@ from db.mysql import (
     verificar_presenca_paciente,
     verificar_cpf_paciente,
     criar_notificacao,
+    buscar_paciente_por_cliente_id, criar_paciente,
 )
 from datetime import datetime
 import re
@@ -297,6 +298,19 @@ async def webhook(request: Request):
                     f"{s['tipo_consulta']} ({s['total']}x)" for s in servicos
                 )
                 perfil_cliente = f"Cliente recorrente. Serviços já solicitados: {lista}."
+
+        # Safety net: se a sessão ficou presa num estado de fluxo mas o agendamento
+        # desta sessão já foi confirmado no banco, reseta para conversa livre.
+        # Verifica apenas o agendamento_id da sessão atual — não agendamentos anteriores.
+        if estado_atual in _ESTADOS_EM_FLUXO:
+            ag_id_sessao = sessao.get("agendamento_id")
+            if ag_id_sessao:
+                ag_sessao = buscar_agendamento_por_id(ag_id_sessao)
+                if ag_sessao and ag_sessao.get("status") == "confirmado":
+                    estado_atual      = EstadosConversa.CONVERSA_LIVRE
+                    dados_agendamento = {}
+                    historico         = []
+                    sessao.pop("agendamento_id", None)
 
         # resposta_direta: quando definida, bypassa o Claude completamente.
         # Garante que mensagens críticas de fluxo sejam exatas e previsíveis.
@@ -589,7 +603,61 @@ async def webhook(request: Request):
                 dados_agendamento["setor"] = setor_detectado
 
             if resposta_direta is None:
-                if dados_agendamento.get("setor"):
+                setor_final   = dados_agendamento.get("setor")
+                data_final    = dados_agendamento.get("data")
+                horario_final = dados_agendamento.get("horario")
+                hora_final    = dados_agendamento.get("hora_int")
+
+                if setor_final and data_final and horario_final and hora_final is not None:
+                    # Todos os dados coletados — finaliza o agendamento aqui diretamente
+                    novo_estado  = EstadosConversa.AGENDAMENTO_CONFIRMADO
+                    data_mysql   = datetime.strptime(data_final, "%d/%m/%Y").strftime("%Y-%m-%d")
+                    data_hora    = datetime.strptime(f"{data_final} {horario_final}", "%d/%m/%Y %H:%M")
+                    tecnicos_disponiveis = buscar_tecnicos_disponiveis(data_mysql, hora_final, setor_final)
+                    tecnico_preferido    = buscar_tecnico_cliente(cliente_id, setor_final)
+                    if tecnico_preferido and any(t["id"] == tecnico_preferido["id"] for t in tecnicos_disponiveis):
+                        tecnico = tecnico_preferido
+                    else:
+                        tecnico = tecnicos_disponiveis[0] if tecnicos_disponiveis else None
+                    campos_update = dict(
+                        tipo_consulta=setor_final,
+                        status="pendente",
+                        data_agendamento=data_hora,
+                        horario=horario_final,
+                    )
+                    nome_pac     = dados_agendamento.get("nome_paciente")
+                    telefone_pac = dados_agendamento.get("telefone_paciente")
+                    if nome_pac:
+                        campos_update["nome_paciente"] = nome_pac
+                    if telefone_pac:
+                        campos_update["telefone_paciente"] = telefone_pac
+                    if tecnico:
+                        campos_update["tecnico_id"] = tecnico["id"]
+                        atribuir_tecnico_cliente(cliente_id, tecnico["id"], setor_final)
+                        marcar_hora_como_ocupada(tecnico["id"], data_mysql, hora_final)
+                    if agendamento_id:
+                        atualizar_agendamento(agendamento_id, **campos_update)
+                    if not buscar_paciente_por_cliente_id(cliente_id):
+                        criar_paciente(nome=nome_pac or "", telefone=telefone_pac, cliente_id=cliente_id)
+                    nome_exibir = nome_pac or "paciente"
+                    if tecnico:
+                        resposta_direta = (
+                            f"Prontinho, {nome_exibir}! Sua solicitação de agendamento foi enviada para nossa equipe.\n\n"
+                            f"Serviço: {setor_final}\n"
+                            f"Data: {data_final}\n"
+                            f"Horário: {horario_final}\n\n"
+                            f"Aguarde — nossa equipe irá analisar e confirmar em breve. "
+                            f"Você receberá uma mensagem aqui pelo WhatsApp assim que for confirmado. "
+                            f"Não é necessário fazer mais nada agora!"
+                        )
+                    else:
+                        resposta_direta = (
+                            f"Sua solicitação para {setor_final} em {data_final} às {horario_final} foi registrada, "
+                            f"mas no momento não há técnicos disponíveis nesse horário. "
+                            f"Nossa equipe entrará em contato para verificar a melhor alternativa."
+                        )
+                    dados_agendamento = {}
+                elif setor_final:
                     novo_estado = EstadosConversa.AGENDAMENTO_CONFIRMADO
                 else:
                     # Setor ainda desconhecido → pede ao cliente
@@ -844,6 +912,14 @@ async def webhook(request: Request):
 
                 if agendamento_id:
                     atualizar_agendamento(agendamento_id, **campos_update)
+
+                # Cria paciente no banco caso ainda não exista para este cliente
+                if not buscar_paciente_por_cliente_id(cliente_id):
+                    criar_paciente(
+                        nome=nome_pac or "",
+                        telefone=telefone_pac,
+                        cliente_id=cliente_id,
+                    )
 
                 nome_exibir = nome_pac or "paciente"
                 if tecnico:

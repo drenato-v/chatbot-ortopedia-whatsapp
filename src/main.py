@@ -6,6 +6,7 @@ load_dotenv(override=True)
 # Framework web assíncrono
 from fastapi import FastAPI
 from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.staticfiles import StaticFiles
 
 # Roteadores de cada módulo da aplicação
 from routes.webhook import router as webhook_router                  # Recebe mensagens do WhatsApp
@@ -30,6 +31,8 @@ app.include_router(estoque_router)
 
 # Diretório base para localizar arquivos estáticos
 _BASE = os.path.dirname(__file__)
+
+app.mount("/static", StaticFiles(directory=os.path.join(_BASE, "static")), name="static")
 
 
 @app.get("/", include_in_schema=False)
